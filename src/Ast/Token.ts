@@ -37,11 +37,11 @@ const BRACKETS = {
 
 export type GroupOpen = keyof typeof BRACKETS
 
-export type GroupClose<O extends GroupOpen = GroupOpen> = O extends "("
+export type GroupClose<Kind extends GroupOpen = GroupOpen> = Kind extends "("
   ? ")"
-  : O extends "{"
+  : Kind extends "{"
     ? "}"
-    : O extends "["
+    : Kind extends "["
       ? "]"
       : ")" | "}" | "]"
 
@@ -56,9 +56,6 @@ function isGroupCloseSymbol(t: Token): t is Symbol$<GroupClose> {
   )
 }
 
-function isSymbol<V extends string = string>(t: Token, v: V): t is Symbol$<V> {
-  return t._tag == "Symbol" && t.value == v
-}
 
 function mapGroupOpenToClose<V extends GroupOpen = GroupOpen>(
   v: V
@@ -81,15 +78,15 @@ function mapGroupCloseToOpen<V extends GroupOpen = GroupOpen>(
 export type Separator = ","
 
 export interface Group<
-  O extends GroupOpen = GroupOpen,
-  F = Token[],
-  S extends Separator = Separator
+  Kind extends GroupOpen = GroupOpen,
+  Field = Token[],
+  Sep extends Separator = Separator
 > {
   readonly _tag: "Group"
-  readonly open: Symbol$<O>
-  readonly close: Symbol$<GroupClose<O>>
-  readonly separators: Symbol$<S>[]
-  readonly fields: F[]
+  readonly open: Symbol$<Kind>
+  readonly fields: Field[]
+  readonly separators: Symbol$<Sep>[]
+  readonly close: Symbol$<GroupClose<Kind>>
 }
 
 export interface Int extends WithComments {
@@ -126,6 +123,10 @@ export type { Symbol$ as Symbol }
 
 function isSeparator(t: Token): t is Symbol$<Separator> {
   return t._tag == "Symbol" && t.value == ","
+}
+
+function isSymbol<V extends string = string>(t: Token, v: V): t is Symbol$<V> {
+  return t._tag == "Symbol" && t.value == v
 }
 
 export interface TemplateString<T = Token[]> extends WithComments {
