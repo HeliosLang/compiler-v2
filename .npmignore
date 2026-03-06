@@ -1,0 +1,8 @@
+node_modules
+src
+.prettierignore
+test
+tsconfig.*tsbuildinfo
+tsconfig.build.json
+tsconfig.json
+bun.lock
