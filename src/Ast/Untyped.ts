@@ -547,6 +547,26 @@ class Parser {
     let expr = this.parsePrimary(r)
 
     while (true) {
+      const applyGroup = r.matches(group("["))
+      if (applyGroup !== undefined) {
+        expr = {
+          _tag: "Apply",
+          gtype: expr,
+          args: {
+            ...applyGroup,
+            _tag: "Group",
+            fields: applyGroup.fields.map((field) => {
+              const arg = this.parseExpression(field)
+
+              field.end()
+
+              return arg
+            })
+          }
+        }
+        continue
+      }
+
       const callGroup = r.matches(group("("))
       if (callGroup !== undefined) {
         expr = {
