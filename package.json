@@ -9,7 +9,9 @@
     "build": "rollup -c ./rollup.config.js",
     "lint": "eslint",
     "prettify": "prettier . --write",
-    "test": "pnpm tsc --noEmit"
+    "test": "pnpm run test:types && pnpm run test:unit",
+    "test:types": "pnpm tsc --noEmit",
+    "test:unit": "bun test"
   },
   "prettier": {
     "trailingComma": "none",

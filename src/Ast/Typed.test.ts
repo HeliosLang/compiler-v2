@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test"
-import { parseScripts, type DataType, type GenericType, type Scope } from "./Typed.js"
+import {
+  parseScripts,
+  type DataType,
+  type GenericType,
+  type Scope
+} from "./Typed.js"
 
 const source = (name: string, content: string) => ({
   name,
@@ -65,7 +70,10 @@ describe("parseScripts", () => {
     const scripts = parseScripts(
       [
         source("alpha.hl", `module alpha; export one = 1`),
-        source("beta.hl", `module beta; import alpha; export copied = alpha::one`)
+        source(
+          "beta.hl",
+          `module beta; import alpha; export copied = alpha::one`
+        )
       ],
       builtins
     )

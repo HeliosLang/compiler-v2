@@ -1039,7 +1039,7 @@ class Parser {
     const statements: Statement[] = []
 
     while (!r.isEof()) {
-      if ((r.matches(symbol(";")))) {
+      if (r.matches(symbol(";"))) {
         continue // absorb spurious semicolons without throwing an error
       } else if ((m = r.matches(comment))) {
         statements.push(m)
