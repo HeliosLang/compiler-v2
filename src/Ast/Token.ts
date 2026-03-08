@@ -56,7 +56,6 @@ function isGroupCloseSymbol(t: Token): t is Symbol$<GroupClose> {
   )
 }
 
-
 function mapGroupOpenToClose<V extends GroupOpen = GroupOpen>(
   v: V
 ): GroupClose<V> {

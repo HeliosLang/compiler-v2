@@ -1,5 +1,5 @@
-/* eslint-disable no-cond-assign */
 import * as Source from "../Source/index.js"
+import * as CompilerError from "./CompilerError.js"
 import {
   Reader,
   anyName,
@@ -28,6 +28,10 @@ export interface Path {
   readonly separators: Token.Symbol<"::">[]
 }
 
+export function pathToString(p: Path) {
+  return p.names.map((n) => n.value).join("::")
+}
+
 /**
  * This is the root node of the Untyped AST
  */
@@ -42,18 +46,33 @@ export interface Script {
   readonly statements: Statement[]
 }
 
-export type Statement = Import | Export | Assign | Declare | Token.Comment
+export function scriptName(script: Script): string {
+  return pathToString(script.path)
+}
+
+export type Statement = Import | TopAssign | Declare | Token.Comment
+
+/**
+ * @param statement
+ * @returns
+ * The names injected by a statement into the script scope
+ */
+function statementNames(statement: Statement): Token.Word[] {
+  switch (statement._tag) {
+    case "Comment":
+      return []
+    case "Declare":
+    case "Assign":
+      return [statement.name]
+    case "Import":
+      return [statement.path.names[statement.path.names.length - 1]]
+  }
+}
 
 export interface Import {
   readonly _tag: "Import"
   readonly import: Token.Word<"import">
   readonly path: Path
-}
-
-export interface Export {
-  readonly _tag: "Export"
-  readonly export: Token.Word<"export">
-  readonly statement: Assign | Declare
 }
 
 export interface TypeGuard {
@@ -72,6 +91,10 @@ export interface Assign {
   readonly rhs: Expression
 }
 
+export interface TopAssign extends Assign {
+  readonly export?: Token.Word<"export"> | undefined
+}
+
 /**
  * Declares a global variable without assigning a value
  *
@@ -79,28 +102,10 @@ export interface Assign {
  */
 export interface Declare {
   readonly _tag: "Declare"
+  readonly export?: Token.Word<"export"> | undefined
   readonly name: Token.Word
   readonly type: TypeGuard
 }
-
-/**
- * Expressions can evaluate to generics, types and instances.
- */
-export type Expression =
-  | BinaryOp
-  | Call
-  | Chain
-  | Construct
-  | FuncDecl
-  | FuncDef
-  | Generic
-  | IfElse
-  | Literal
-  | Member
-  | Parens
-  | Reference
-  | TemplateString
-  | UnaryOp
 
 /**
  * Type application that turns a generic type into a concrete type
@@ -157,8 +162,7 @@ export interface Construct {
           }
         | undefined
       readonly value: Expression
-    },
-    ","
+    }
   >
 }
 
@@ -189,7 +193,7 @@ export interface Enum {
  * Function type expression
  */
 export interface FuncDecl {
-  readonly _tag: "FuncDecl",
+  readonly _tag: "FuncDecl"
   readonly args: Token.Group<"(", Expression>
   readonly arrow: Token.Symbol<"->">
   readonly body: Expression
@@ -200,7 +204,7 @@ export interface FuncDecl {
  * TODO: a location for the return type?
  */
 export interface FuncDef {
-  readonly _tag: "FuncDef",
+  readonly _tag: "FuncDef"
   readonly args: Token.Group<
     "(",
     {
@@ -208,6 +212,7 @@ export interface FuncDef {
       readonly type: TypeGuard
     }
   >
+  readonly returns?: TypeGuard | undefined
   readonly arrow: Token.Symbol<"->">
   readonly body: Expression
 }
@@ -232,9 +237,9 @@ export interface IfElse {
   readonly _tag: "IfElse"
   readonly if: Token.Word<"if">
   readonly condition: Expression
-  readonly trueBranch: Chain
+  readonly ifBranch: Chain
   readonly else: Token.Word<"else">
-  readonly falseBranch: IfElse | Chain
+  readonly elseBranch: IfElse | Chain
 }
 
 export interface Literal {
@@ -298,11 +303,83 @@ export interface UnaryOp {
   right: Expression
 }
 
+/**
+ * Expressions can evaluate to generics, types and instances.
+ */
+export type Expression =
+  | Apply
+  | BinaryOp
+  | Call
+  | Chain
+  | Construct
+  | FuncDecl
+  | FuncDef
+  | Generic
+  | IfElse
+  | Literal
+  | Member
+  | Parens
+  | Reference
+  | TemplateString
+  | UnaryOp
+
+export function sourceSpan(node: Path | Expression): Source.Span {
+  switch (node._tag) {
+    case "Path":
+      return Source.mergeSpan(
+        node.names[0].sourceSpan,
+        node.names[node.names.length - 1].sourceSpan
+      )
+    case "Apply":
+      return Source.mergeSpan(
+        node.args.open.sourceSpan,
+        node.args.close.sourceSpan
+      )
+    case "BinaryOp":
+      return node.op.sourceSpan
+    case "Call":
+      return Source.mergeSpan(
+        node.args.open.sourceSpan,
+        node.args.close.sourceSpan
+      )
+    case "Chain":
+      return Source.mergeSpan(node.open.sourceSpan, node.close.sourceSpan)
+    case "Construct":
+      return Source.mergeSpan(
+        node.args.open.sourceSpan,
+        node.args.close.sourceSpan
+      )
+    case "FuncDecl":
+      return node.arrow.sourceSpan
+    case "FuncDef":
+      return node.arrow.sourceSpan
+    case "Generic":
+      return node.arrow.sourceSpan
+    case "IfElse":
+      return node.if.sourceSpan
+    case "Literal":
+      return node.value.sourceSpan
+    case "Member":
+      return node.dot.sourceSpan
+    case "Parens":
+      return Source.mergeSpan(
+        node.group.open.sourceSpan,
+        node.group.close.sourceSpan
+      )
+    case "Reference":
+      return sourceSpan(node.path)
+    case "TemplateString":
+      return node.sourceSpan
+    case "UnaryOp":
+      return node.op.sourceSpan
+  }
+}
+
 export function parseScript(src: Source.Source): Script {
   const reader = new Reader(
     Token.tokenize(src, {
       preserveNewlines: true
-    }), 
+    }),
     {
       ignoreNewlines: true
     }
@@ -315,12 +392,11 @@ export function parseScript(src: Source.Source): Script {
 
 /**
  * The parser methods call each recursively inside this class.
- * 
+ *
  * The `Parser` class makes it easy to give the parsing additional context
  */
 class Parser {
-  constructor() {
-  }
+  constructor() {}
 
   parseScript(r: Reader): Script {
     return {
@@ -335,7 +411,7 @@ class Parser {
    * - Assign with TypeGuard
    * - Assign without TypeGuard
    * - Declare with TypeGuard
-   * 
+   *
    * Note: TypeGuard can be any expression as long as it doesn't contain an equals sign, hence it's better to apply semicolon insertion to statements block
    */
   private parseAssignOrDeclare(r: Reader): Assign | Declare {
@@ -343,17 +419,21 @@ class Parser {
       let m
 
       if ((m = r.findNext(symbol("=")))) {
-        r = m[0]
-
-        const name = this.parseNonKeyword(r)
-        const type = this.parseOptionalTypeGuard(r)
+        const lhs = m[0]
         const equals = m[1]
-        
+        const name = this.parseNonKeyword(lhs)
+        const type = this.parseOptionalTypeGuard(lhs)
+
+        lhs.end()
+
+        const rhs = this.parseExpression(r)
+
         return {
           _tag: "Assign",
           name,
           equals,
-          type
+          type,
+          rhs
         } as Assign
       } else {
         // Declare
@@ -409,6 +489,11 @@ class Parser {
       return this.parseFunc(fnExpr[0], fnExpr[1], r)
     }
 
+    const fnDefExpr = r.matches(group("("), symbol(":"))
+    if (fnDefExpr !== undefined) {
+      return this.parseFuncDef(fnDefExpr[0], fnDefExpr[1], r)
+    }
+
     return this.parseAddSub(r)
   }
 
@@ -416,7 +501,7 @@ class Parser {
     let left = this.parseMulDiv(r)
     let m
 
-    while (m = r.matches(oneOf([symbol("+"), symbol("-")]))) {
+    while ((m = r.matches(oneOf([symbol("+"), symbol("-")])))) {
       left = {
         _tag: "BinaryOp",
         left,
@@ -432,7 +517,7 @@ class Parser {
     let left = this.parseUnary(r)
     let m
 
-    while (m = r.matches(oneOf([symbol("*"), symbol("/")]))) {
+    while ((m = r.matches(oneOf([symbol("*"), symbol("/")])))) {
       left = {
         _tag: "BinaryOp",
         left,
@@ -505,7 +590,9 @@ class Parser {
             fields: construct.fields.map((field) => {
               const p = field.findNext(symbol(":"))
 
-              let property: {key: Expression, colon: Token.Symbol<":">} | undefined = undefined
+              let property:
+                | { key: Expression; colon: Token.Symbol<":"> }
+                | undefined = undefined
 
               if (p !== undefined) {
                 const [keyReader, colon] = p
@@ -625,9 +712,9 @@ class Parser {
       _tag: "IfElse",
       if: ifWord,
       condition,
-      trueBranch,
+      ifBranch: trueBranch,
       else: elseWord,
-      falseBranch
+      elseBranch: falseBranch
     }
   }
 
@@ -733,7 +820,7 @@ class Parser {
     const body = this.parseExpression(r)
 
     let isDef = true
-    const defArgs: {name: Token.Word, type: TypeGuard}[] = []
+    const defArgs: { name: Token.Word; type: TypeGuard }[] = []
     const declArgs: Expression[] = []
 
     for (const field of argsGroup.fields) {
@@ -776,6 +863,56 @@ class Parser {
     }
   }
 
+  private parseFuncDef(
+    argsGroup: ReaderGroup<"(">,
+    colon: Token.Symbol<":">,
+    r: Reader
+  ): FuncDef {
+    const m = r.findNext(symbol("->"))
+
+    if (m === undefined) {
+      throw r.syntaxError("Expected '->' after '(...):' ")
+    }
+
+    const arrow = m[1]
+
+    const typeExpr = this.parseExpression(m[0])
+    m[0].end()
+
+    const defArgs: { name: Token.Word; type: TypeGuard }[] = []
+
+    for (const field of argsGroup.fields) {
+      let m
+
+      if ((m = field.matches(anyName, symbol(":")))) {
+        defArgs.push({
+          name: m[0],
+          type: {
+            colon: m[1],
+            type: this.parseExpression(field)
+          }
+        })
+      } else {
+        throw field.syntaxError("Expected '<name>: <type>'")
+      }
+    }
+
+    const body = this.parseExpression(r)
+
+    return {
+      _tag: "FuncDef",
+      args: {
+        ...argsGroup,
+        fields: defArgs
+      },
+      returns: {
+        colon,
+        type: typeExpr
+      },
+      arrow,
+      body
+    }
+  }
 
   private parseOptionalTypeGuard(r: Reader): TypeGuard | undefined {
     let m
@@ -795,11 +932,11 @@ class Parser {
   /**
    * TODO: support more advanced import syntax
    * @param kw
-   * @returns 
+   * @returns
    */
   private parseImport(kw: Token.Word<"import">, r: Reader): Import {
     const path = this.parseUntilSemicolonOrEof(r, (r) => this.parsePath(r))
-    
+
     return {
       _tag: "Import",
       import: kw,
@@ -807,12 +944,15 @@ class Parser {
     }
   }
 
-  private parseUntilSemicolonOrEof<T>(r: Reader, callback: (r: Reader) => T): T {
+  private parseUntilSemicolonOrEof<T>(
+    r: Reader,
+    callback: (r: Reader) => T
+  ): T {
     const m = r.findNext(symbol(";"))
 
     if (m !== undefined) {
-      [r] = m
-    } 
+      ;[r] = m
+    }
 
     const result: T = callback(r)
 
@@ -821,11 +961,13 @@ class Parser {
     return result
   }
 
-  private parseExport(kw: Token.Word<"export">, r: Reader): Export {
+  private parseExport(
+    kw: Token.Word<"export">,
+    r: Reader
+  ): TopAssign | Declare {
     return {
-      _tag: "Export",
-      export: kw,
-      statement: this.parseAssignOrDeclare(r)
+      ...this.parseAssignOrDeclare(r),
+      export: kw
     }
   }
 
@@ -861,7 +1003,9 @@ class Parser {
     const m = r.matches(oneOf([word("validator"), word("module")]))
 
     if (m === undefined) {
-      throw r.syntaxError(`Invalid script header, expected 'validator' or 'module'`)
+      throw r.syntaxError(
+        `Invalid script header, expected 'validator' or 'module'`
+      )
     }
 
     return m
@@ -875,14 +1019,31 @@ class Parser {
     const statements: Statement[] = []
 
     while (!r.isEof()) {
-      if (m = r.matches(comment)) {
+      if ((r.matches(symbol(";")))) {
+        continue // absorb spurious semicolons without throwing an error
+      } else if ((m = r.matches(comment))) {
         statements.push(m)
-      } else if (m = r.matches(word("import"))) {
+      } else if ((m = r.matches(word("import")))) {
         statements.push(this.parseImport(m, r))
-      } else if (m = r.matches(word("export"))) {
+      } else if ((m = r.matches(word("export")))) {
         statements.push(this.parseExport(m, r))
       } else {
         statements.push(this.parseAssignOrDeclare(r))
+      }
+    }
+
+    const names = new Map<string, Token.Word>()
+
+    for (const statement of statements) {
+      for (const name of statementNames(statement)) {
+        if (names.has(name.value)) {
+          throw new CompilerError.Reference(
+            name.sourceSpan,
+            `'${name.value}' already defined`
+          )
+        }
+
+        names.set(name.value, name)
       }
     }
 

@@ -20,6 +20,13 @@ export interface Span {
   readonly end: number
 }
 
+export function mergeSpan(a: Span, b: Span): Span {
+  return {
+    ...a,
+    end: b.end
+  }
+}
+
 export const DummySpan = (): Span => ({
   source: { name: "", content: "" },
   start: 0,

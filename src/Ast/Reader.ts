@@ -22,11 +22,9 @@ export { any$ as any }
 const reserved = ["copy", "else", "if", "switch"]
 
 export const anyName: Matcher<Token.Word> = (t) =>
-    t._tag == "Word" &&
-    !t.value.startsWith("__") &&
-    !reserved.includes(t.value)
-        ? t
-        : undefined
+  t._tag == "Word" && !t.value.startsWith("__") && !reserved.includes(t.value)
+    ? t
+    : undefined
 
 export const bool =
   (value: boolean | undefined = undefined): Matcher<Token.Bool> =>
@@ -39,13 +37,16 @@ export const bytes: Matcher<Token.Bytes> = (t) =>
   t._tag == "Bytes" ? t : undefined
 
 export const comment: Matcher<Token.Comment> = (t) =>
-    t._tag == "Comment" ? t : undefined
+  t._tag == "Comment" ? t : undefined
 
-
-export const group = <Kind extends Token.GroupOpen = Token.GroupOpen>(open: Kind): Matcher<Token.Group<Kind>> =>(t): Token.Group<Kind> | undefined =>
+export const group =
+  <Kind extends Token.GroupOpen = Token.GroupOpen>(
+    open: Kind
+  ): Matcher<Token.Group<Kind>> =>
+  (t): Token.Group<Kind> | undefined =>
     t._tag == "Group" && t.open.value == open
-    ? (t as Token.Group<Kind>)
-    : undefined
+      ? (t as Token.Group<Kind>)
+      : undefined
 
 export const int =
   (value: bigint | undefined = undefined): Matcher<Token.Int> =>
@@ -54,17 +55,23 @@ export const int =
       ? t
       : undefined
 
-export const oneOf = <Ms extends Matcher[]>(matchers: [...Ms]): Matcher<Ms extends Array<Matcher<infer T>> ? T : never> => (t) => {
+export const oneOf =
+  <Ms extends Matcher[]>(
+    matchers: [...Ms]
+  ): Matcher<Ms extends Array<Matcher<infer T>> ? T : never> =>
+  (t) => {
     for (const matcher of matchers) {
-        const match = matcher(t)
+      const match = matcher(t)
 
-        if (match !== undefined) {
-            return match as unknown as (Ms extends Array<Matcher<infer T>> ? T : never)
-        }
+      if (match !== undefined) {
+        return match as unknown as Ms extends Array<Matcher<infer T>>
+          ? T
+          : never
+      }
     }
 
     return undefined
-}
+  }
 
 export const real: Matcher<Token.Real> = (t) =>
   t._tag == "Real" ? t : undefined
@@ -85,12 +92,11 @@ export const symbol =
       ? (t as Token.Symbol<V>)
       : undefined
 
-
 export const templateString: Matcher<Token.TemplateString> = (t) =>
-    t._tag == "TemplateString"
-        ? (t as Token.TemplateString<Token.Token[]>)
-        : undefined
-      
+  t._tag == "TemplateString"
+    ? (t as Token.TemplateString<Token.Token[]>)
+    : undefined
+
 export const word =
   <V extends string = string>(
     v: V | undefined = undefined,
@@ -182,8 +188,8 @@ export class Reader {
 
   syntaxError(reason: string) {
     return new CompilerError.Syntax(
-        Token.sourceSpan(this.tokens[this.pos]),
-        reason
+      Token.sourceSpan(this.tokens[this.pos]),
+      reason
     )
   }
 
