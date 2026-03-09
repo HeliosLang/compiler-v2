@@ -96,7 +96,7 @@ describe("parseScripts", () => {
       [
         source(
           "functions.hl",
-          `module functions export id: Int = 1; export one = id`
+          `module functions export id: Int = 1 + 1; export one = id`
         )
       ],
       builtins
