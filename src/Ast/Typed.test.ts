@@ -1,19 +1,31 @@
 import { describe, expect, it } from "bun:test"
+import * as Source from "../Source/index.js"
 import {
   parseScripts,
+  pathToString,
   type DataType,
   type GenericType,
-  type Scope
+  type Scope,
+  type Path,
 } from "./Typed.js"
+import * as Untyped from "./Untyped.js"
 
 const source = (name: string, content: string) => ({
   name,
   content
 })
 
-const dataType = (path: string): DataType => ({
+const makePath = (path: string): Path => Untyped.makePath(Source.DummySpan(), path)
+
+const dataType = (path: string, appliedTypes?: DataType[]): DataType => ({
   _tag: "DataType",
-  path,
+  path:
+    appliedTypes === undefined || appliedTypes.length == 0
+      ? makePath(path)
+      : {
+          ...makePath(path),
+          appliedTypes
+        },
   properties: {},
   variants: {}
 })
@@ -21,13 +33,13 @@ const dataType = (path: string): DataType => ({
 const listGeneric: GenericType = {
   _tag: "GenericType",
   nArgs: 1,
-  type: ([item]) => dataType(`List[${item.path}]`)
+  type: ([item]) => dataType("List", [item])
 }
 
 const mapGeneric: GenericType = {
   _tag: "GenericType",
   nArgs: 2,
-  type: ([key, value]) => dataType(`Map[${key.path},${value.path}]`)
+  type: ([key, value]) => dataType("Map", [key, value])
 }
 
 const builtins: Scope = {
@@ -62,8 +74,8 @@ describe("parseScripts", () => {
       throw new Error("expected 'ok' to be a Typed DataType")
     }
 
-    expect(one.type.path).toBe("Int")
-    expect(ok.type.path).toBe("Bool")
+    expect(pathToString(one.type.path)).toBe("Int")
+    expect(Untyped.pathToString(ok.type.path)).toBe("Bool")
   })
 
   it("resolves imports and namespace references across scripts", () => {
@@ -88,7 +100,7 @@ describe("parseScripts", () => {
       throw new Error("expected 'copied' to be a Typed DataType")
     }
 
-    expect(copied.type.path).toBe("Int")
+    expect(Untyped.pathToString(copied.type.path)).toBe("Int")
   })
 
   it("resolves typed assignments and references across statements", () => {
@@ -117,8 +129,8 @@ describe("parseScripts", () => {
       throw new Error("expected 'one' to be a Typed DataType")
     }
 
-    expect(id.type.path).toBe("Int")
-    expect(one.type.path).toBe("Int")
+    expect(Untyped.pathToString(id.type.path)).toBe("Int")
+    expect(Untyped.pathToString(one.type.path)).toBe("Int")
   })
 
   it("resolves exported List[Bool] declaration", () => {
@@ -137,7 +149,7 @@ describe("parseScripts", () => {
       throw new Error("expected 'xs' to be a Typed DataType")
     }
 
-    expect(xs.type.path).toBe("List[Bool]")
+    expect(pathToString(xs.type.path)).toBe("List[Bool]")
   })
 
   it("resolves exported type alias of List[Bool]", () => {
@@ -156,6 +168,6 @@ describe("parseScripts", () => {
       throw new Error("expected 'FlagList' to be a DataType")
     }
 
-    expect(flagList.path).toBe("List[Bool]")
+    expect(pathToString(flagList.path)).toBe("List[Bool]")
   })
 })

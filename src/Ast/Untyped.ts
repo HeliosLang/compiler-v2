@@ -32,6 +32,36 @@ export function pathToString(p: Path) {
   return p.names.map((n) => n.value).join("::")
 }
 
+export function makePath(sourceSpan: Source.Span, value: string): Path {
+  const parts = value.split("::")
+
+  if (parts.length == 0 || parts.some((part) => part.length == 0)) {
+    throw new Error(`invalid path '${value}'`)
+  }
+
+  return {
+    _tag: "Path",
+    names: parts.map((part) => ({
+      _tag: "Word",
+      value: part,
+      sourceSpan
+    })),
+    separators: parts.slice(1).map(() => ({
+      _tag: "Symbol",
+      value: "::",
+      sourceSpan
+    }))
+  }
+}
+
+export function extendPath(p: Path, name: Token.Word): Path {
+  return {
+    ...p,
+    names: [...p.names, name],
+    separators: [...p.separators, {_tag: "Symbol", value: "::", sourceSpan: name.sourceSpan}]
+  }
+}
+
 /**
  * This is the root node of the Untyped AST
  */

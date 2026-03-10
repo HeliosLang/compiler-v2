@@ -25,6 +25,7 @@ export interface Namespace {
 export interface Typed<T extends Type = Type> {
   readonly _tag: "Typed"
   readonly type: T
+  readonly path?: Path
 }
 
 export type Type = DataType | FuncType
@@ -37,7 +38,7 @@ export interface DataType {
    *
    * Comparing path should be good enough for uniqueness
    */
-  readonly path: string
+  readonly path: Path
 
   /**
    * Tuple can be encoded by using integer keys
@@ -47,12 +48,14 @@ export interface DataType {
   readonly variants: Record<string, DataType>
 }
 
+
+
 function isBool(typed: Typed): typed is Typed<DataType> {
   return isBoolType(typed.type)
 }
 
 function isBoolType(type: Type): type is DataType {
-  return type._tag == "DataType" && type.path == "Bool"
+  return type._tag == "DataType" && pathToString(type.path) == "Bool"
 }
 
 function isDataType(type: Type): type is DataType {
@@ -60,11 +63,15 @@ function isDataType(type: Type): type is DataType {
 }
 
 function isListType(type: Type): type is DataType {
-  return type._tag == "DataType" && type.path.startsWith("List[")
+  return type._tag == "DataType" && type.path.names[0].value == "List"
 }
 
 function isMapType(type: Type): type is DataType {
-  return type._tag == "DataType" && type.path.startsWith("Map[")
+  return type._tag == "DataType" && type.path.names[0].value == "Map"
+}
+
+function isUnitType(type: Type): type is DataType {
+  return type._tag == "DataType" && pathToString(type.path) == "Unit"
 }
 
 export interface FuncType {
@@ -97,6 +104,19 @@ function isAssignableTo(type: Type, target: Type): boolean {
   }
 }
 
+export interface Path extends Untyped.Path {
+  /**
+   * Only DataTypes can be applied to generic structs/enums/tuples
+   * 
+   * In therory any Type can be applied to generic functions, but that leads to whole other range of problems
+   */
+  appliedTypes?: DataType[]
+}
+
+export function pathToString(path: Path): string {
+  return `${Untyped.pathToString(path)}${path.appliedTypes && path.appliedTypes.length > 0 ? `[${path.appliedTypes.map(t => pathToString(t.path)).join("][")}]` : ""}`
+}
+
 export interface Script extends Omit<Untyped.Script, "statements"> {
   readonly statements: Statement[]
   readonly resolved: Namespace
@@ -125,14 +145,17 @@ export interface Assign extends Omit<Untyped.Assign, "rhs" | "type"> {
 
 export interface TopAssign extends Assign {
   readonly export?: Token.Word<"export"> | undefined
+  readonly path: Path
 }
 
 interface TopAssignFirstPass extends Omit<TopAssign, "rhs"> {
   readonly rhs: TopAssignRhsFirstPass
+  readonly path: Path
 }
 
 export interface Declare extends Omit<Untyped.Declare, "type"> {
   readonly type: TypeGuard
+  readonly path: Path
 }
 
 export interface Apply extends Omit<Untyped.Apply, "gtype" | "args"> {
@@ -142,32 +165,32 @@ export interface Apply extends Omit<Untyped.Apply, "gtype" | "args"> {
 }
 
 export interface BinaryOp extends Omit<Untyped.BinaryOp, "left" | "right"> {
-  readonly left: Expression
-  readonly right: Expression
+  readonly left: InstanceExpression
+  readonly right: InstanceExpression
   readonly resolved: Typed<DataType>
 }
 
 export interface Call extends Omit<Untyped.Call, "fn" | "args"> {
-  readonly fn: Expression
-  readonly args: Token.Group<"(", Expression>
+  readonly fn: InstanceExpression
+  readonly args: Token.Group<"(", InstanceExpression>
   readonly resolved: Typed
 }
 
 export interface Chain extends Omit<Untyped.Chain, "statements" | "returns"> {
   readonly statements: (Assign | Call)[]
-  readonly returns: Expression
+  readonly returns: InstanceExpression
   readonly resolved: Typed
 }
 
 export interface MapConstruct {
   readonly _tag: "MapConstruct"
-  readonly type: Expression
+  readonly type: TypeExpression
   readonly args: Token.Group<
     "{",
     {
-      readonly key: Expression
+      readonly key: InstanceExpression
       readonly colon: Token.Symbol<":">
-      readonly value: Expression
+      readonly value: InstanceExpression
     }
   >
   readonly resolved: Typed<DataType>
@@ -175,14 +198,14 @@ export interface MapConstruct {
 
 export interface ListConstruct {
   readonly _tag: "ListConstruct"
-  readonly type: Expression
-  readonly args: Token.Group<"{", Expression>
+  readonly type: TypeExpression
+  readonly args: Token.Group<"{", InstanceExpression>
   readonly resolved: Typed<DataType>
 }
 
 export interface Construct {
   readonly _tag: "Construct"
-  readonly type: Expression
+  readonly type: TypeExpression
   readonly args: Token.Group<
     "{",
     {
@@ -192,7 +215,7 @@ export interface Construct {
             colon: Token.Symbol<":">
           }
         | undefined
-      readonly value: Expression
+      readonly value: InstanceExpression
     }
   >
   readonly resolved: Typed<DataType>
@@ -203,8 +226,8 @@ export interface Enum extends Untyped.Enum {
 }
 
 export interface FuncDecl extends Omit<Untyped.FuncDecl, "args" | "body"> {
-  readonly args: Token.Group<"(", Expression>
-  readonly body: Expression
+  readonly args: Token.Group<"(", TypeExpression>
+  readonly body: TypeExpression
   readonly resolved: FuncType
 }
 
@@ -220,7 +243,7 @@ export interface FuncDef extends Omit<
     }
   >
   readonly returns?: TypeGuard | undefined
-  readonly body: Expression
+  readonly body: InstanceExpression
   readonly resolved: Typed<FuncType>
 }
 
@@ -238,7 +261,7 @@ export interface IfElse extends Omit<
   Untyped.IfElse,
   "condition" | "ifBranch" | "elseBranch"
 > {
-  readonly condition: Expression
+  readonly condition: InstanceExpression
   readonly ifBranch: Chain
   readonly elseBranch: IfElse | Chain
   readonly resolved: Typed
@@ -249,26 +272,35 @@ export interface Literal extends Untyped.Literal {
 }
 
 export interface Member extends Omit<Untyped.Member, "object"> {
-  readonly object: Expression
+  readonly object: InstanceExpression
   readonly resolved: Typed<DataType>
 }
 
 /**
  * Resolved empty parentheses depends on the context whether the SymbolValue is Typed or Type
  */
-export interface Parens<
+export interface MultiParens<
   T extends Typed<DataType> | DataType = Typed<DataType> | DataType
-> extends Omit<Untyped.Parens, "group"> {
-  readonly group: Token.Group<"(", Expression>
+> {
+  readonly _tag: "MultiParens"
+  readonly group: Token.Group<"(", T extends Typed<DataType> ? InstanceExpression : T extends DataType ? TypeExpression : Expression>
   readonly resolved: T
 }
 
-function isInstanceParens(parens: Parens): parens is Parens<Typed<DataType>> {
-  return parens.resolved._tag == "Typed"
+export interface SingleParens<T extends Typed<Type> | Type = Typed<Type> | Type> {
+    readonly _tag: "SingleParens"
+    readonly open: Token.Symbol<"(">
+    readonly expr: T extends Typed<Type> ? InstanceExpression : T extends Type ? TypeExpression : Expression
+    readonly close: Token.Symbol<")">
+    readonly resolved: T
 }
 
-function isTypeParens(parens: Parens): parens is Parens<DataType> {
-  return parens.resolved._tag == "DataType"
+export function isInstanceParens(parens: MultiParens | SingleParens): parens is (MultiParens<Typed<DataType>> | SingleParens<Typed>) {
+    return parens.resolved._tag == "Typed"
+}
+
+function isTypeParens(parens: MultiParens | SingleParens): parens is (MultiParens<DataType> | SingleParens<Type>) {
+  return isType(parens.resolved)
 }
 
 export interface Reference<S extends SymbolValue = SymbolValue>
@@ -276,7 +308,7 @@ export interface Reference<S extends SymbolValue = SymbolValue>
   readonly resolved: S
 }
 
-function isInstanceReference(ref: Reference): ref is Reference<Typed> {
+export function isInstanceReference(ref: Reference): ref is Reference<Typed> {
   return ref.resolved._tag == "Typed"
 }
 
@@ -288,12 +320,12 @@ export interface Struct extends Untyped.Struct {
   resolved: DataType
 }
 
-export interface TemplateString extends Token.TemplateString<Expression> {
+export interface TemplateString extends Token.TemplateString<InstanceExpression> {
   resolved: Typed<DataType>
 }
 
 export interface UnaryOp extends Omit<Untyped.UnaryOp, "right"> {
-  readonly right: Expression
+  readonly right: InstanceExpression
   readonly resolved: Typed<DataType>
 }
 
@@ -311,8 +343,9 @@ export type Expression =
   | Literal
   | MapConstruct
   | Member
-  | Parens
+  | MultiParens
   | Reference
+  | SingleParens
   | TemplateString
   | UnaryOp
 
@@ -327,16 +360,18 @@ export type InstanceExpression =
   | Literal
   | MapConstruct
   | Member
-  | Parens<Typed<DataType>>
+  | MultiParens<Typed<DataType>>
   | Reference<Typed>
+  | SingleParens<Typed>
   | TemplateString
   | UnaryOp
 
 export type TypeExpression =
   | Apply
   | FuncDecl
-  | Parens<DataType>
+  | MultiParens<DataType>
   | Reference<Type>
+  | SingleParens<Type>
 
 type TopAssignRhsFirstPass = Exclude<Expression, FuncDef> | FuncDefFirstPass
 
@@ -470,7 +505,7 @@ class Resolver {
           break
         case "Declare":
           {
-            const resolvedDeclare = this.resolveDeclare(statement, scope)
+            const resolvedDeclare = this.resolveDeclare(statement, scope, script.path)
             scope = resolvedDeclare.scope
             firstPass.push(resolvedDeclare.statement)
           }
@@ -479,7 +514,8 @@ class Resolver {
           {
             const resolvedAssign = this.resolveTopAssignFirstPass(
               statement,
-              scope
+              scope,
+              script.path
             )
             scope = resolvedAssign.scope
             firstPass.push(resolvedAssign.statement)
@@ -550,7 +586,8 @@ class Resolver {
 
   private resolveDeclare(
     untyped: Untyped.Declare,
-    scope: Scope
+    scope: Scope,
+    scriptPath: Untyped.Path
   ): { scope: Scope; statement: Declare } {
     const resolvedType = this.resolveTypeGuard(untyped.type, scope)
 
@@ -565,17 +602,20 @@ class Resolver {
       scope,
       statement: {
         ...untyped,
-        type: resolvedType
+        type: resolvedType,
+        path: Untyped.extendPath(scriptPath, untyped.name)
       } satisfies Declare
     }
   }
 
   private resolveTopAssignFirstPass(
     untyped: Untyped.TopAssign,
-    scope: Scope
+    scope: Scope,
+    scriptPath: Untyped.Path
   ): { scope: Scope; statement: TopAssignFirstPass } {
     let resolvedAssign: TopAssignFirstPass
 
+    const symbolPath = Untyped.extendPath(scriptPath, untyped.name)
     if (untyped.type !== undefined && untyped.rhs._tag == "FuncDef") {
       const resolvedRhs = this.resolveFuncDefFirstPass(untyped.rhs, scope)
       const resolvedType = this.resolveTypeGuard(untyped.type, scope)
@@ -592,13 +632,15 @@ class Resolver {
 
       scope = addToScope(scope, untyped.name, {
         _tag: "Typed",
-        type: resolvedType.resolved
+        type: resolvedType.resolved,
+        path: symbolPath
       })
 
       resolvedAssign = {
         ...untyped,
         type: resolvedType,
-        rhs: resolvedRhs
+        rhs: resolvedRhs,
+        path: symbolPath
       }
     } else if (untyped.type !== undefined) {
       const resolvedRhs = this.resolveInstanceExpression(untyped.rhs, scope)
@@ -619,25 +661,37 @@ class Resolver {
 
       scope = addToScope(scope, untyped.name, {
         _tag: "Typed",
-        type: resolvedType.resolved
+        type: resolvedType.resolved,
+        path: symbolPath
       })
 
       resolvedAssign = {
         ...untyped,
         type: resolvedType,
-        rhs: resolvedRhs
+        rhs: resolvedRhs,
+        path: symbolPath
       }
     } else if (untyped.rhs._tag == "FuncDef") {
       const resolvedRhs = this.resolveFuncDefFirstPass(untyped.rhs, scope)
 
+      
       if (resolvedRhs.resolved !== undefined) {
-        addToScope(scope, untyped.name, resolvedRhs.resolved)
+        let symbolValue = resolvedRhs.resolved
+        if (symbolValue._tag == "Typed") {
+            symbolValue = {
+                ...resolvedRhs.resolved,
+                path: symbolPath
+            }
+        }
+
+        addToScope(scope, untyped.name, symbolValue)
       }
 
       resolvedAssign = {
         ...untyped,
         rhs: resolvedRhs,
-        type: undefined
+        type: undefined,
+        path: symbolPath
       }
     } else {
       const resolvedRhs = this.resolveExpression(untyped.rhs, scope)
@@ -648,12 +702,22 @@ class Resolver {
         )
       }
 
-      scope = addToScope(scope, untyped.name, resolvedRhs.resolved)
+      let symbolValue = resolvedRhs.resolved
+
+      if (symbolValue._tag == "Typed") {
+        symbolValue = {
+            ...symbolValue,
+            path: symbolPath
+        }
+      }
+
+      scope = addToScope(scope, untyped.name, symbolValue)
 
       resolvedAssign = {
         ...untyped,
         rhs: resolvedRhs,
-        type: undefined
+        type: undefined,
+        path: symbolPath
       }
     }
 
@@ -678,7 +742,16 @@ class Resolver {
           )
         }
       } else {
-        scope = addToScope(scope, firstPass.name, resolvedRhs.resolved, false)
+        let symbolValue = resolvedRhs.resolved
+
+        if (symbolValue._tag == "Typed") {
+            symbolValue = {
+                ...symbolValue,
+                path: firstPass.path
+            }
+        }
+
+        scope = addToScope(scope, firstPass.name, symbolValue, false)
       }
 
       return {
@@ -773,6 +846,17 @@ class Resolver {
       )
     }
 
+    const dataTypeArgs: DataType[] = args.map((a, i) => {
+      if (a.resolved._tag != "DataType") {
+        throw new CompilerError.Type(
+          Untyped.sourceSpan(untyped.args.fields[i]),
+          "All apply args must be DataTypes"
+        )
+      }
+
+      return a.resolved
+    })
+
     return {
       ...untyped,
       gtype,
@@ -780,7 +864,7 @@ class Resolver {
         ...untyped.args,
         fields: args
       },
-      resolved: gtype.resolved.type(args.map((a) => a.resolved as DataType))
+      resolved: gtype.resolved.type(dataTypeArgs)
     }
   }
 
@@ -867,6 +951,14 @@ class Resolver {
     for (const statement of untyped.statements) {
       if (statement._tag == "Call") {
         const resolvedCall = this.resolveCall(statement, scope)
+
+        if (!isUnitType(resolvedCall.resolved.type)) {
+          throw new CompilerError.Type(
+            Untyped.sourceSpan(statement),
+            "Expected Unit return type for chain statement call"
+          )
+        }
+
         statements.push(resolvedCall)
       } else {
         let resolvedType: TypeGuard | undefined
@@ -945,9 +1037,9 @@ class Resolver {
       }
     } else if (isMapType(type)) {
       const args: {
-        key: Expression
+        key: InstanceExpression
         colon: Token.Symbol<":">
-        value: Expression
+        value: InstanceExpression
       }[] = []
 
       for (const field of untyped.args.fields) {
@@ -1118,7 +1210,11 @@ class Resolver {
         arg,
         {
           _tag: "DataType",
-          path: arg.value,
+          path: {
+            _tag: "Path",
+            names: [arg],
+            separators: []
+          },
           properties: {},
           variants: {}
         },
@@ -1143,7 +1239,18 @@ class Resolver {
 
           const nonGenericBody = this.resolveTypeExpression(untyped.body, scope)
 
-          return nonGenericBody.resolved
+          if (nonGenericBody.resolved._tag == "DataType") {
+            return {
+              ...nonGenericBody.resolved,
+              path: {
+                ...nonGenericBody.resolved.path,
+                appliedTypes: args
+              }
+            }
+          } else {
+            // TODO: should applied generic FuncType also reference the types that were applied to it?
+            return nonGenericBody.resolved
+          }
         }
       }
     }
@@ -1260,72 +1367,161 @@ class Resolver {
     }
   }
 
-  private resolveParens(untyped: Untyped.Parens, scope: Scope): Parens {
-    const fields = untyped.group.fields.map((field) =>
-      this.resolveExpression(field, scope)
-    )
+  private resolveParens(untyped: Untyped.Parens, scope: Scope): MultiParens | SingleParens {
+    if (this.context == "Instance") {
+        const fields = untyped.group.fields.map((field) => 
+            this.resolveInstanceExpression(field, scope)
+        )
 
-    if (fields.length == 0) {
-      const resolved: DataType = {
-        _tag: "DataType",
-        path: "Unit",
-        properties: {},
-        variants: {}
-      }
+        if (fields.length == 0) {
+            return {
+                _tag: "MultiParens",
+                group: {
+                    ...untyped.group,
+                    fields
+                },
+                resolved: {
+                    _tag: "Typed",
+                    type: {
+                        _tag: "DataType",
+                        path: {
+                          _tag: "Path",
+                          names: [{
+                            _tag: "Word",
+                            value: "Unit",
+                            sourceSpan: Source.mergeSpan(untyped.group.open.sourceSpan, untyped.group.close.sourceSpan)
+                          }],
+                          separators: []
+                        },
+                        properties: {},
+                        variants: {}
+                    }
+                }
+            }
+        } else if (fields.length == 1) {
+            return {
+                _tag: "SingleParens",
+                open: untyped.group.open,
+                close: untyped.group.close,
+                expr: fields[0],
+                resolved: fields[0].resolved
+            }
+        } else {
+            const dataFields: Typed<DataType>[] = fields.map((f, i) => {
+                if (f.resolved._tag == "Typed" && isDataType(f.resolved.type)) {
+                    return f.resolved as Typed<DataType>
+                } else {
+                    throw new CompilerError.Type(
+                        Untyped.sourceSpan(untyped),
+                        "Tuple expressions must be all data instances in this context"
+                    )
+                }
+            })
 
-      return {
-        ...untyped,
-        group: {
-          ...untyped.group,
-          fields
-        },
-        resolved
-      }
+            return {
+                _tag: "MultiParens",
+                group: {
+                    ...untyped.group,
+                    fields
+                },
+                resolved: {
+                    _tag: "Typed",
+                    type: {
+                        _tag: "DataType",
+                        path: {
+                          _tag: "Path",
+                          names: [{
+                            _tag: "Word",
+                            value: "Tuple",
+                            sourceSpan: Source.mergeSpan(untyped.group.open.sourceSpan, untyped.group.close.sourceSpan),
+                          }],
+                          separators: [],
+                          appliedTypes: dataFields.map(d => d.type)
+
+                        },
+                        properties: {},
+                        variants: {}
+                    }
+                }
+            }
+        }
+    } else if (this.context == "Type") {
+        const fields = untyped.group.fields.map((field) => 
+            this.resolveTypeExpression(field, scope)
+        )
+
+        if (fields.length == 0) {
+            return {
+                _tag: "MultiParens",
+                group: {
+                    ...untyped.group,
+                    fields
+                },
+                resolved: {
+                    _tag: "DataType",
+                    path: {
+                          _tag: "Path",
+                          names: [{
+                            _tag: "Word",
+                            value: "Unit",
+                            sourceSpan: Source.mergeSpan(untyped.group.open.sourceSpan, untyped.group.close.sourceSpan)
+                          }],
+                          separators: []
+                        },
+                    properties: {},
+                    variants: {}
+                }
+            }
+        } else if (fields.length == 1) {
+            return {
+                _tag: "SingleParens",
+                open: untyped.group.open,
+                close: untyped.group.close,
+                expr: fields[0],
+                resolved: fields[0].resolved
+            }
+        } else {
+            const dataFields = fields.map((f, i) => {
+                if (isDataType(f.resolved)) {
+                    return f.resolved
+                } else {
+                    throw new CompilerError.Type(
+                        Untyped.sourceSpan(untyped),
+                        "Tuple expressions must be all data types in this context"
+                    )
+                }
+            })
+
+            return {
+                _tag: "MultiParens",
+                group: {
+                    ...untyped.group,
+                    fields
+                },
+                resolved: {
+                    _tag: "DataType",
+                    path: {
+                          _tag: "Path",
+                          names: [{
+                            _tag: "Word",
+                            value: "Tuple",
+                            sourceSpan: Source.mergeSpan(untyped.group.open.sourceSpan, untyped.group.close.sourceSpan),
+                          }],
+                          separators: [],
+                          appliedTypes: dataFields
+
+                        },
+                    properties: {},
+                    variants: {}
+                }
+            }
+        }
+    } else {
+        throw new Error("resolveParens() requires context to by Instance or Type")
     }
+    
 
-    if (fields.length == 1) {
-      return {
-        ...untyped,
-        group: {
-          ...untyped.group,
-          fields
-        },
-        resolved: fields[0].resolved as Typed<DataType> | DataType
-      }
-    }
-
-    const allTypes = fields.every((f) => isType(f.resolved))
-    const allInstances = fields.every(
-      (f) => f.resolved._tag == "Typed" && f.resolved.type._tag == "DataType"
-    )
-
-    if (!allTypes && !allInstances) {
-      throw new CompilerError.Type(
-        Untyped.sourceSpan(untyped),
-        "Tuple expressions must be all types or all instances"
-      )
-    }
-
-    const tupleType: DataType = {
-      _tag: "DataType",
-      path: `Tuple${fields.length}`,
-      properties: {},
-      variants: {}
-    }
-
-    return {
-      ...untyped,
-      group: {
-        ...untyped.group,
-        fields
-      },
-      resolved: allTypes
-        ? tupleType
-        : {
-            _tag: "Typed",
-            type: tupleType
-          }
-    }
+    
   }
 
   private resolveReference(
@@ -1441,7 +1637,8 @@ class Resolver {
       case "TemplateString":
       case "UnaryOp":
         return expr
-      case "Parens":
+    case "MultiParens":
+      case "SingleParens":
         if (isInstanceParens(expr)) {
           return expr
         } else {
@@ -1500,7 +1697,8 @@ class Resolver {
           Untyped.sourceSpan(untyped),
           "Expected Type, got Instance"
         )
-      case "Parens":
+      case "MultiParens":
+      case "SingleParens":
         if (isTypeParens(expr)) {
           return expr
         } else {
