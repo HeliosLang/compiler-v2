@@ -55,6 +55,9 @@ export const int =
       ? t
       : undefined
 
+export const newline: Matcher<Token.Newline> = (t) =>
+  t._tag == "Newline" ? t : undefined
+
 export const oneOf =
   <Ms extends Matcher[]>(
     matchers: [...Ms]
@@ -161,7 +164,9 @@ export class Reader {
 
   constructor(tokens: Token.Token[], config: ReaderConfig) {
     this.origTokens = tokens
-    this.tokens = tokens
+    this.tokens = config.ignoreNewlines
+      ? tokens.filter((t) => t._tag != "Newline")
+      : tokens
     this.config = config
     this.pos = 0
   }
@@ -341,11 +346,7 @@ export class Reader {
     }
 
     const tokens: Token.Token[] = []
-
-    /**
-     * @type {undefined | Token}
-     */
-    let prev
+    let prev: Token.Token | undefined
 
     const n = orig.length
 

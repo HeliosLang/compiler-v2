@@ -92,7 +92,7 @@ function isInstanceOf(typed: Typed, type: Type) {
 
 function isAssignableTo(type: Type, target: Type): boolean {
   if (type._tag == "DataType" && target._tag == "DataType") {
-    return type.path == target.path
+    return pathToString(type.path) == pathToString(target.path)
   } else if (type._tag == "FuncType" && target._tag == "FuncType") {
     return (
       type.args.length == target.args.length &&

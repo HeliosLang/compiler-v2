@@ -8,6 +8,7 @@ import {
   comment,
   group,
   int,
+  newline,
   oneOf,
   real,
   symbol,
@@ -786,7 +787,11 @@ class Parser {
     }
 
     if (group.fields.length > 1) {
-      segments.push(...group.fields)
+      const comma = group.separators[0] ?? group.open
+      throw new CompilerError.Syntax(
+        comma.sourceSpan,
+        "Unexpected ',' in chain body"
+      )
     } else {
       const body = group.fields[0].insertSemicolons(["=", "+", "&&", ":"])
 
@@ -1062,7 +1067,7 @@ class Parser {
   }
 
   private parseStatements(r: Reader): Statement[] {
-    r = r.insertSemicolons(["=", "+", "&&", ":"])
+    r = r.insertSemicolons(["=", "+", "&&", ":", "->"])
 
     let m
 
@@ -1071,6 +1076,8 @@ class Parser {
     while (!r.isEof()) {
       if (r.matches(symbol(";"))) {
         continue // absorb spurious semicolons without throwing an error
+      } else if (r.matches(newline)) {
+        continue // newlines can separate top-level statements
       } else if ((m = r.matches(comment))) {
         statements.push(m)
       } else if ((m = r.matches(word("import")))) {
