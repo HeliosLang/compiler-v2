@@ -470,7 +470,9 @@ class Generator {
             tagExpr.value._tag != "Int"
           ) {
             throw new CompilerError.Syntax(
-              tagExpr ? expressionSourceSpan(tagExpr) : expr.args.open.sourceSpan,
+              tagExpr !== undefined
+                ? expressionSourceSpan(tagExpr)
+                : expr.args.open.sourceSpan,
               "Expected integer literal tag as first argument of constr()"
             )
           }
@@ -624,7 +626,10 @@ function expressionSourceSpan(expr: Expression): Source.Span {
     case "Error":
       return Source.mergeSpan(expr.error.sourceSpan, expr.close.sourceSpan)
     case "FuncDef":
-      return Source.mergeSpan(expr.args.open.sourceSpan, expr.body.close.sourceSpan)
+      return Source.mergeSpan(
+        expr.args.open.sourceSpan,
+        expr.body.close.sourceSpan
+      )
     case "Literal":
       return expr.sourceSpan
     case "Reference":

@@ -492,24 +492,20 @@ describe("generateIR", () => {
 
 describe("generateEntryPointIR", () => {
   it("wraps parameters and definitions around the entrypoint body", () => {
-    const entryPoint = {
+    const entryPoint: Applied.EntryPoint = {
       _tag: "EntryPoint",
-      parameters: [
-        {
-          path: Untyped.makePath(dummySpan(), "demo::param")
-        } as any
-      ],
+      parameters: [Untyped.makePath(dummySpan(), "demo::param")],
       definitions: [
         {
           _tag: "Definition",
           path: Untyped.makePath(dummySpan(), "demo::def"),
           expr: literal(5n)
-        } as any
+        }
       ],
       body: reference("result")
     } as const
 
-    const ir = Applied.generateEntryPointIR(entryPoint as any)
+    const ir = Applied.generateEntryPointIR(entryPoint)
 
     expect(ir._tag).toBe("FuncDef")
     if (ir._tag !== "FuncDef") {

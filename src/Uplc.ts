@@ -520,7 +520,7 @@ function encodeCborBytes(
   }
 
   let res = [2 * 32 + 31]
-  let remaining = bs.slice()
+  const remaining = bs.slice()
 
   while (remaining.length > 0) {
     const chunk = remaining.splice(0, 64)
@@ -537,9 +537,7 @@ function encodeCborList(items: readonly number[][]): number[] {
     return encodeDefHead(4, 0n)
   }
 
-  return [4 * 32 + 31]
-    .concat(...items)
-    .concat([255])
+  return [4 * 32 + 31].concat(...items).concat([255])
 }
 
 function encodeCborMap(
@@ -575,11 +573,7 @@ function encodeDefHead(m: number, n: bigint | number): number[] {
   } else if (value <= 255n) {
     return [32 * m + 24, Number(value)]
   } else if (value <= 256n * 256n - 1n) {
-    return [
-      32 * m + 25,
-      Number((value / 256n) % 256n),
-      Number(value % 256n)
-    ]
+    return [32 * m + 25, Number((value / 256n) % 256n), Number(value % 256n)]
   } else if (value <= 256n * 256n * 256n * 256n - 1n) {
     return [32 * m + 26].concat(padBytes(encodeBigEndian(value), 4))
   } else if (

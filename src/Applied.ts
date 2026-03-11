@@ -28,7 +28,7 @@ function pathToString(path: Path): string {
 function pathScriptName(path: Path): string {
   if (path.names.length < 2) {
     throw new Error(
-      `expected 2 path elements to be able to extract script name, got ${path.names.map(n => n.value).join("::")}`
+      `expected 2 path elements to be able to extract script name, got ${path.names.map((n) => n.value).join("::")}`
     )
   }
 
@@ -62,7 +62,7 @@ export interface EntryPoint {
   /**
    * Positional parameters
    */
-  readonly parameters: Typed.Declare[]
+  readonly parameters: Path[]
 
   /**
    * Builtin and user and definitions
@@ -240,7 +240,9 @@ export type Globals = Record<
   }
 >
 
-export function makeBuiltins(globals: Globals): Record<string, Raw | undefined> {
+export function makeBuiltins(
+  globals: Globals
+): Record<string, Raw | undefined> {
   const builtins: Record<string, Raw | undefined> = {}
 
   for (const k in globals) {
@@ -248,20 +250,19 @@ export function makeBuiltins(globals: Globals): Record<string, Raw | undefined> 
 
     if (v.symbolValue._tag == "Typed") {
       if (v.implementation) {
-      builtins[k] = {
-        _tag: "Raw",
-        ir: v.implementation.ir,
-        dependencies: v.implementation.deps,
-        resolved: v.symbolValue
+        builtins[k] = {
+          _tag: "Raw",
+          ir: v.implementation.ir,
+          dependencies: v.implementation.deps,
+          resolved: v.symbolValue
+        }
+      } else {
+        /**
+         * A core or globally available symbol, that doesn't requiring a Raw expression
+         */
+        builtins[k] = undefined
       }
-    } else {
-      /**
-       * A core or globally available symbol, that doesn't requiring a Raw expression
-       */
-      builtins[k] = undefined
     }
-    }
-    
   }
 
   return builtins
@@ -389,9 +390,11 @@ class Applier {
 
     return {
       _tag: "EntryPoint",
-      parameters: this.positionalParams.map((pp) =>
-        this.findParameterDeclaration(pp)
-      ),
+      parameters: this.positionalParams.map((pp) => {
+        const declare = this.findParameterDeclaration(pp)
+
+        return declare.path
+      }),
       definitions,
       body: entryPointDef.expr
     }
@@ -649,10 +652,7 @@ class Applier {
       case "Reference":
         return {
           applied: expr,
-          dependencies:
-            expr.resolved.path
-              ? [expr.resolved.path]
-              : []
+          dependencies: expr.resolved.path ? [expr.resolved.path] : []
         }
       case "SingleParens": {
         const arg = this.applyExpression(expr.expr)
@@ -843,9 +843,11 @@ class Applier {
    * @param component
    * Used for hidden auto-generated methods (eg. path=`Bool` component=`and`)
    * @returns
-   * An InstanceExpression of a symbol, or undefined if the path 
+   * An InstanceExpression of a symbol, or undefined if the path
    */
-  private findInstanceExpression(path: Path): Typed.InstanceExpression | Raw | undefined {
+  private findInstanceExpression(
+    path: Path
+  ): Typed.InstanceExpression | Raw | undefined {
     const pathStr = pathToString(path)
     if (pathStr in this.builtins) {
       return this.builtins[pathStr]
@@ -1949,7 +1951,7 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
       continue
     }
 
-    result = wrapWithFuncDef(pathToString(parameter.path), result)
+    result = wrapWithFuncDef(pathToString(parameter), result)
   }
 
   return result
