@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import * as Source from "../Source/index.js"
+import * as Source from "./Source.js"
 import {
   parseScripts,
   pathToString,

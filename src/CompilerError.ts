@@ -1,4 +1,4 @@
-import * as Source from "../Source/index.js"
+import * as Source from "./Source.js"
 
 class Base extends Error {
   /**

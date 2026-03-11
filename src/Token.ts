@@ -1,4 +1,4 @@
-import * as Source from "../Source/index.js"
+import * as Source from "./Source.js"
 import * as CompilerError from "./CompilerError.js"
 
 interface WithSpan {

@@ -1,4 +1,4 @@
-import * as Source from "../Source/index.js"
+import * as Source from "./Source.js"
 import * as CompilerError from "./CompilerError.js"
 import * as Token from "./Token.js"
 import * as Untyped from "./Untyped.js"

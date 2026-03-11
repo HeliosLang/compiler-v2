@@ -1,4 +1,4 @@
-import * as Source from "../Source/index.js"
+import * as Source from "./Source.js"
 import * as IR from "./IR.js"
 import * as Token from "./Token.js"
 import * as Typed from "./Typed.js"
@@ -28,7 +28,7 @@ function pathToString(path: Path): string {
 function pathScriptName(path: Path): string {
   if (path.names.length < 2) {
     throw new Error(
-      "expected 2 path elements to be able to extract script name"
+      `expected 2 path elements to be able to extract script name, got ${path.names.map(n => n.value).join("::")}`
     )
   }
 
@@ -227,22 +227,51 @@ export type Expression =
 
 export type BuildOptions = {
   compileFunctions?: boolean | undefined
-  builtins?: Readonly<Record<string, Raw>> | undefined
+  builtins?: Readonly<Record<string, Raw | undefined>> | undefined
   positionalParams?: readonly string[] | undefined
   substituteParams?: Readonly<Record<string, Raw>> | undefined
+}
+
+export type Globals = Record<
+  string,
+  {
+    symbolValue: Typed.SymbolValue
+    implementation?: { ir: string; deps: Path[] }
+  }
+>
+
+export function makeBuiltins(globals: Globals): Record<string, Raw | undefined> {
+  const builtins: Record<string, Raw | undefined> = {}
+
+  for (const k in globals) {
+    const v = globals[k]
+
+    if (v.symbolValue._tag == "Typed") {
+      if (v.implementation) {
+      builtins[k] = {
+        _tag: "Raw",
+        ir: v.implementation.ir,
+        dependencies: v.implementation.deps,
+        resolved: v.symbolValue
+      }
+    } else {
+      /**
+       * A core or globally available symbol, that doesn't requiring a Raw expression
+       */
+      builtins[k] = undefined
+    }
+    }
+    
+  }
+
+  return builtins
 }
 
 export function parseEntryPoints(
   srcs: Source.Source[],
   options: {
     compileFunctions?: boolean | undefined
-    globals: Record<
-      string,
-      {
-        symbolValue: Typed.SymbolValue
-        implementation?: { ir: string; deps: string[] }
-      }
-    >
+    globals: Globals
     positionalParams?: readonly string[]
     substituteParams?: Readonly<Record<string, Raw>> | undefined // TODO: prefer UplcData as input instead, and convert to Raw internally
   }
@@ -254,22 +283,7 @@ export function parseEntryPoints(
     )
   )
 
-  const builtins: Record<string, Raw> = {}
-
-  for (const k in options.globals ?? {}) {
-    const v = options.globals[k]
-
-    if (v.implementation && v.symbolValue._tag == "Typed") {
-      builtins[k] = {
-        _tag: "Raw",
-        ir: v.implementation.ir,
-        dependencies: v.implementation.deps.map((d) =>
-          Untyped.makePath(Source.DummySpan(), d)
-        ),
-        resolved: v.symbolValue
-      }
-    }
-  }
+  const builtins = makeBuiltins(options.globals ?? {})
 
   return buildEntryPoints(scripts, {
     builtins,
@@ -319,13 +333,13 @@ export function buildEntryPoints(
 }
 
 class Applier {
-  readonly builtins: Readonly<Record<string, Raw>>
+  readonly builtins: Readonly<Record<string, Raw | undefined>>
   readonly scripts: Readonly<Record<string, Typed.Script>>
   readonly positionalParams: readonly string[]
   readonly substituteParams: Readonly<Record<string, Raw>>
 
   constructor(
-    builtins: Readonly<Record<string, Raw>>,
+    builtins: Readonly<Record<string, Raw | undefined>>,
     scripts: Readonly<Record<string, Typed.Script>>,
     positionalParams: readonly string[],
     substituteParams: Readonly<Record<string, Raw>>
@@ -453,6 +467,10 @@ class Applier {
   ): Readonly<Record<string, Definition>> {
     const entryPoint = this.findInstanceExpression(entryPointPath)
 
+    if (entryPoint === undefined) {
+      throw new Error(`Entrypoint ${pathToString(entryPointPath)} not found`)
+    }
+
     /**
      * The string key is the stringified path of the Definition
      */
@@ -480,10 +498,14 @@ class Applier {
             continue
           }
 
-          stack.push({
-            path: dep,
-            expr: this.findInstanceExpression(dep)
-          })
+          const depExpr = this.findInstanceExpression(dep)
+
+          if (depExpr !== undefined) {
+            stack.push({
+              path: dep,
+              expr: depExpr
+            })
+          }
         }
       }
 
@@ -627,7 +649,10 @@ class Applier {
       case "Reference":
         return {
           applied: expr,
-          dependencies: expr.resolved.path ? [expr.resolved.path] : []
+          dependencies:
+            expr.resolved.path
+              ? [expr.resolved.path]
+              : []
         }
       case "SingleParens": {
         const arg = this.applyExpression(expr.expr)
@@ -818,9 +843,9 @@ class Applier {
    * @param component
    * Used for hidden auto-generated methods (eg. path=`Bool` component=`and`)
    * @returns
-   * An InstanceExpression of a symbol
+   * An InstanceExpression of a symbol, or undefined if the path 
    */
-  private findInstanceExpression(path: Path): Typed.InstanceExpression | Raw {
+  private findInstanceExpression(path: Path): Typed.InstanceExpression | Raw | undefined {
     const pathStr = pathToString(path)
     if (pathStr in this.builtins) {
       return this.builtins[pathStr]
@@ -1898,4 +1923,150 @@ class CodeGenerator {
 
 export function generateIR(expr: Expression): IR.Expression {
   return new CodeGenerator().expression(expr)
+}
+
+export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
+  let result = generateIR(entryPoint.body)
+
+  for (let i = entryPoint.definitions.length - 1; i >= 0; i--) {
+    const definition = entryPoint.definitions[i]
+
+    if (definition === undefined) {
+      continue
+    }
+
+    result = wrapWithDefinition(
+      pathToString(definition.path),
+      generateIR(definition.expr),
+      result
+    )
+  }
+
+  for (let i = entryPoint.parameters.length - 1; i >= 0; i--) {
+    const parameter = entryPoint.parameters[i]
+
+    if (parameter === undefined) {
+      continue
+    }
+
+    result = wrapWithFuncDef(pathToString(parameter.path), result)
+  }
+
+  return result
+}
+
+function wrapWithDefinition(
+  name: string,
+  value: IR.Expression,
+  body: IR.Expression
+): IR.Expression {
+  const sourceSpan = Source.DummySpan()
+
+  return {
+    _tag: "Call",
+    fn: {
+      _tag: "FuncDef",
+      args: {
+        _tag: "Group",
+        open: {
+          _tag: "Symbol",
+          value: "(",
+          sourceSpan
+        },
+        fields: [
+          {
+            _tag: "Word",
+            value: name,
+            sourceSpan
+          }
+        ],
+        separators: [],
+        close: {
+          _tag: "Symbol",
+          value: ")",
+          sourceSpan
+        }
+      },
+      arrow: {
+        _tag: "Symbol",
+        value: "->",
+        sourceSpan
+      },
+      body: {
+        open: {
+          _tag: "Symbol",
+          value: "{",
+          sourceSpan
+        },
+        expr: body,
+        close: {
+          _tag: "Symbol",
+          value: "}",
+          sourceSpan
+        }
+      }
+    },
+    args: {
+      _tag: "Group",
+      open: {
+        _tag: "Symbol",
+        value: "(",
+        sourceSpan
+      },
+      fields: [value],
+      separators: [],
+      close: {
+        _tag: "Symbol",
+        value: ")",
+        sourceSpan
+      }
+    }
+  }
+}
+
+function wrapWithFuncDef(name: string, body: IR.Expression): IR.Expression {
+  const sourceSpan = Source.DummySpan()
+
+  return {
+    _tag: "FuncDef",
+    args: {
+      _tag: "Group",
+      open: {
+        _tag: "Symbol",
+        value: "(",
+        sourceSpan
+      },
+      fields: [
+        {
+          _tag: "Word",
+          value: name,
+          sourceSpan
+        }
+      ],
+      separators: [],
+      close: {
+        _tag: "Symbol",
+        value: ")",
+        sourceSpan
+      }
+    },
+    arrow: {
+      _tag: "Symbol",
+      value: "->",
+      sourceSpan
+    },
+    body: {
+      open: {
+        _tag: "Symbol",
+        value: "{",
+        sourceSpan
+      },
+      expr: body,
+      close: {
+        _tag: "Symbol",
+        value: "}",
+        sourceSpan
+      }
+    }
+  }
 }

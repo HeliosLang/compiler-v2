@@ -1,4 +1,4 @@
-import * as Source from "../Source/index.js"
+import * as Source from "./Source.js"
 import * as CompilerError from "./CompilerError.js"
 import {
   Reader,
@@ -103,6 +103,14 @@ export function resolveNames(
 ): Expression {
   const resolver = new Resolver(new Set(scopeNames))
   return resolver.resolveExpression(expr)
+}
+
+export function generateUplc(
+  expr: Expression,
+  scopeNames: Iterable<string> = []
+): Uplc.Term {
+  const scope = Array.from(scopeNames)
+  return new Generator().expression(resolveNames(expr, scope), scope)
 }
 
 class Parser {
@@ -380,7 +388,7 @@ class Resolver {
       return expr
     }
 
-    if (Uplc.BUILTIN_NAMES.includes(expr.name.value)) {
+    if (Uplc.BUILTIN_NAMES.some((builtin) => builtin.name == expr.name.value)) {
       return {
         ...expr,
         isBuiltin: true
@@ -406,4 +414,255 @@ class Resolver {
       `'${expr.name.value}' undefined`
     )
   }
+}
+
+class Generator {
+  expression(expr: Expression, scope: readonly string[]): Uplc.Term {
+    switch (expr._tag) {
+      case "Call":
+        return this.call(expr, scope)
+      case "Error":
+        return {
+          _tag: "Error",
+          sourceSpan: toUplcSourceSpan(expressionSourceSpan(expr))
+        }
+      case "FuncDef":
+        return this.funcDef(expr, scope)
+      case "Literal":
+        return {
+          _tag: "Const",
+          value: expr.value,
+          sourceSpan: toUplcSourceSpan(expr.sourceSpan)
+        }
+      case "Reference":
+        return this.reference(expr, scope)
+    }
+  }
+
+  private call(expr: Call, scope: readonly string[]): Uplc.Term {
+    if (expr.fn._tag == "Reference" && expr.fn.isSpecial === true) {
+      const sourceSpan = toUplcSourceSpan(expressionSourceSpan(expr))
+
+      switch (expr.fn.name.value) {
+        case "case": {
+          const [arg, ...cases] = expr.args.fields
+
+          if (arg === undefined) {
+            throw new CompilerError.Syntax(
+              expr.args.open.sourceSpan,
+              "Expected at least one argument for case()"
+            )
+          }
+
+          return {
+            _tag: "Case",
+            arg: this.expression(arg, scope),
+            cases: cases.map((branch) => this.expression(branch, scope)),
+            sourceSpan
+          }
+        }
+        case "constr": {
+          const [tagExpr, ...args] = expr.args.fields
+
+          if (
+            tagExpr === undefined ||
+            tagExpr._tag != "Literal" ||
+            tagExpr.value._tag != "Int"
+          ) {
+            throw new CompilerError.Syntax(
+              tagExpr ? expressionSourceSpan(tagExpr) : expr.args.open.sourceSpan,
+              "Expected integer literal tag as first argument of constr()"
+            )
+          }
+
+          const tag = Number(tagExpr.value.value)
+
+          if (!Number.isSafeInteger(tag)) {
+            throw new CompilerError.Syntax(
+              tagExpr.sourceSpan,
+              "Expected constr() tag to be a safe integer"
+            )
+          }
+
+          return {
+            _tag: "Constr",
+            tag,
+            args: args.map((arg) => this.expression(arg, scope)),
+            sourceSpan
+          }
+        }
+        default:
+          throw new Error(`unexpected special term ${expr.fn.name.value}`)
+      }
+    }
+
+    const sourceSpan = toUplcSourceSpan(expressionSourceSpan(expr))
+    let term = this.expression(expr.fn, scope)
+
+    if (expr.args.fields.length == 0) {
+      return {
+        _tag: "Force",
+        arg: term,
+        sourceSpan
+      }
+    }
+
+    for (let i = 0; i < expr.args.fields.length; i++) {
+      const arg = expr.args.fields[i]
+
+      if (arg === undefined) {
+        continue
+      }
+
+      term = {
+        _tag: "Apply",
+        fn: term,
+        arg: this.expression(arg, scope),
+        sourceSpan: i == expr.args.fields.length - 1 ? sourceSpan : undefined
+      }
+    }
+
+    return term
+  }
+
+  private funcDef(expr: FuncDef, scope: readonly string[]): Uplc.Term {
+    const sourceSpan = toUplcSourceSpan(expressionSourceSpan(expr))
+    const nextScope = scope.concat(expr.args.fields.map((arg) => arg.value))
+    let term = this.expression(expr.body.expr, nextScope)
+
+    if (expr.args.fields.length == 0) {
+      return {
+        _tag: "Delay",
+        arg: term,
+        sourceSpan
+      }
+    }
+
+    for (let i = expr.args.fields.length - 1; i >= 0; i--) {
+      const arg = expr.args.fields[i]
+
+      if (arg === undefined) {
+        continue
+      }
+
+      term = {
+        _tag: "Lambda",
+        body: term,
+        argName: arg.value,
+        sourceSpan
+      }
+    }
+
+    return term
+  }
+
+  private reference(expr: Reference, scope: readonly string[]): Uplc.Term {
+    const sourceSpan = toUplcSourceSpan(expr.name.sourceSpan)
+
+    if (expr.isBuiltin === true) {
+      const builtin = Uplc.BUILTIN_NAMES.find(
+        (builtin) => builtin.name == expr.name.value
+      )
+
+      if (builtin === undefined) {
+        throw new CompilerError.Reference(
+          expr.name.sourceSpan,
+          `builtin '${expr.name.value}' not found`
+        )
+      }
+
+      let term: Uplc.Term = {
+        _tag: "Builtin",
+        id: Uplc.BUILTIN_NAMES.indexOf(builtin),
+        name: builtin.name,
+        sourceSpan
+      }
+
+      for (let i = 0; i < builtin.nForces; i++) {
+        term = {
+          _tag: "Force",
+          arg: term,
+          sourceSpan
+        }
+      }
+
+      return term
+    }
+
+    if (expr.isSpecial === true) {
+      throw new CompilerError.Syntax(
+        expr.name.sourceSpan,
+        `Special term '${expr.name.value}' must be called`
+      )
+    }
+
+    for (let i = scope.length - 1; i >= 0; i--) {
+      if (scope[i] == expr.name.value) {
+        return {
+          _tag: "Var",
+          index: scope.length - i,
+          name: expr.name.value,
+          sourceSpan
+        }
+      }
+    }
+
+    throw new CompilerError.Reference(
+      expr.name.sourceSpan,
+      `'${expr.name.value}' undefined`
+    )
+  }
+}
+
+function expressionSourceSpan(expr: Expression): Source.Span {
+  switch (expr._tag) {
+    case "Call":
+      return Source.mergeSpan(
+        expressionSourceSpan(expr.fn),
+        expr.args.close.sourceSpan
+      )
+    case "Error":
+      return Source.mergeSpan(expr.error.sourceSpan, expr.close.sourceSpan)
+    case "FuncDef":
+      return Source.mergeSpan(expr.args.open.sourceSpan, expr.body.close.sourceSpan)
+    case "Literal":
+      return expr.sourceSpan
+    case "Reference":
+      return expr.name.sourceSpan
+  }
+}
+
+function toUplcSourceSpan(span: Source.Span): Uplc.SourceSpan | undefined {
+  if (Source.isDummySpan(span)) {
+    return undefined
+  }
+
+  const start = offsetToLineColumn(span.source.content, span.start)
+  const end = offsetToLineColumn(span.source.content, span.end)
+
+  return {
+    file: span.source.name,
+    start,
+    end
+  }
+}
+
+function offsetToLineColumn(
+  content: string,
+  offset: number
+): { line: number; column: number } {
+  const clamped = Math.max(0, Math.min(offset, content.length))
+  let line = 1
+  let column = 1
+
+  for (let i = 0; i < clamped; i++) {
+    if (content[i] == "\n") {
+      line += 1
+      column = 1
+    } else {
+      column += 1
+    }
+  }
+
+  return { line, column }
 }

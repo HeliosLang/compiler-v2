@@ -1,38 +1,24 @@
 import { describe, expect, it } from "bun:test"
-import * as Source from "../Source/index.js"
-import { generateIR, parseEntryPoints } from "./Applied.js"
-import type {
-  Assign as AppliedAssign,
-  Call as AppliedCall,
-  Chain as AppliedChain,
-  Construct as AppliedConstruct,
-  IfElse as AppliedIfElse,
-  ListConstruct as AppliedListConstruct,
-  Literal as AppliedLiteral,
-  Raw as AppliedRaw,
-  Reference as AppliedReference
-} from "./Applied.js"
+import * as Source from "./Source.js"
+import * as Applied from "./Applied.js"
 import type * as IR from "./IR.js"
-import type { DataType, FuncType, SymbolValue, Type } from "./Typed.js"
-import { makePath } from "./Untyped.js"
+import * as Typed from "./Typed.js"
+import * as Untyped from "./Untyped.js"
 
-const dataType = (name: string): DataType => ({
+const dataType = (name: string): Typed.DataType => ({
   _tag: "DataType",
-  path: makePath(Source.DummySpan(), name),
+  path: Untyped.makePath(Source.DummySpan(), name),
   properties: {},
   variants: {}
 })
 
-const addIntegerType: FuncType = {
+const addIntegerType: Typed.FuncType = {
   _tag: "FuncType",
   args: [dataType("Int"), dataType("Int")],
   returns: dataType("Int")
 }
 
-const globals: Record<
-  string,
-  { symbolValue: SymbolValue; implementation?: { ir: string; deps: string[] } }
-> = {
+const globals: Applied.Globals = {
   Bool: { symbolValue: dataType("Bool") },
   Int: { symbolValue: dataType("Int") },
   ByteArray: { symbolValue: dataType("ByteArray") },
@@ -42,7 +28,7 @@ const globals: Record<
     symbolValue: {
       _tag: "Typed",
       type: addIntegerType,
-      path: makePath(Source.DummySpan(), "addInteger")
+      path: Untyped.makePath(Source.DummySpan(), "addInteger")
     },
     implementation: {
       ir: "(a,b)->{addInteger(a,b)}",
@@ -86,19 +72,19 @@ const group = <Kind extends "(" | "[" | "{", Field>(
 
 const typedData = (
   name: string,
-  properties: Record<string, DataType> = {},
-  appliedTypes?: DataType[]
-): DataType => ({
+  properties: Record<string, Typed.DataType> = {},
+  appliedTypes?: Typed.DataType[]
+): Typed.DataType => ({
   _tag: "DataType",
   path: {
-    ...makePath(dummySpan(), name),
+    ...Untyped.makePath(dummySpan(), name),
     ...(appliedTypes ? { appliedTypes } : {})
   },
   properties,
   variants: {}
 })
 
-const literal = (value: bigint): AppliedLiteral => ({
+const literal = (value: bigint): Applied.Literal => ({
   _tag: "Literal" as const,
   value: {
     _tag: "Int" as const,
@@ -114,10 +100,10 @@ const literal = (value: bigint): AppliedLiteral => ({
 
 const reference = (
   name: string,
-  type: Type = dataType("Int")
-): AppliedReference => ({
+  type: Typed.Type = dataType("Int")
+): Applied.Reference => ({
   _tag: "Reference" as const,
-  path: makePath(dummySpan(), name),
+  path: Untyped.makePath(dummySpan(), name),
   resolved: {
     _tag: "Typed" as const,
     type
@@ -134,10 +120,10 @@ const irRefName = (expr: IR.Expression) => {
 }
 
 const chain = (
-  statements: (AppliedAssign | AppliedCall)[],
-  returns: AppliedReference | AppliedLiteral,
-  resolvedType: DataType
-): AppliedChain => ({
+  statements: (Applied.Assign | Applied.Call)[],
+  returns: Applied.Reference | Applied.Literal,
+  resolvedType: Typed.DataType
+): Applied.Chain => ({
   _tag: "Chain",
   open: symbol("{"),
   statements,
@@ -154,12 +140,12 @@ const intTyped = {
   type: dataType("Int")
 }
 
-const intBranch = (value: bigint): AppliedChain =>
+const intBranch = (value: bigint): Applied.Chain =>
   chain([], literal(value), intTyped.type)
 
 describe("parseEntryPoints", () => {
   it("parses exported validator main with literal integer rhs", () => {
-    const entryPoints = parseEntryPoints(
+    const entryPoints = Applied.parseEntryPoints(
       [{ name: "v-main.hl", content: "validator demo; export main = 0" }],
       { globals }
     )
@@ -183,7 +169,7 @@ describe("parseEntryPoints", () => {
   })
 
   it("parses exported validator main function calling addInteger with integer literals", () => {
-    const entryPoints = parseEntryPoints(
+    const entryPoints = Applied.parseEntryPoints(
       [
         {
           name: "v-add.hl",
@@ -235,7 +221,7 @@ describe("parseEntryPoints", () => {
   })
 
   it("parses exported validator main function with chain body assigning addInteger result before return", () => {
-    const entryPoints = parseEntryPoints(
+    const entryPoints = Applied.parseEntryPoints(
       [
         {
           name: "v-add-chain.hl",
@@ -287,7 +273,7 @@ describe("generateIR", () => {
       first: dataType("Int"),
       second: dataType("Int")
     })
-    const expr: AppliedConstruct = {
+    const expr: Applied.Construct = {
       _tag: "Construct",
       args: group("{", [
         {
@@ -311,7 +297,7 @@ describe("generateIR", () => {
       }
     }
 
-    const result = generateIR(expr)
+    const result = Applied.generateIR(expr)
 
     expect(result._tag).toBe("Call")
     if (result._tag !== "Call") {
@@ -344,7 +330,7 @@ describe("generateIR", () => {
 
   it("lowers list constructors into mkCons and to_data calls", () => {
     const intType = dataType("Int")
-    const expr: AppliedListConstruct = {
+    const expr: Applied.ListConstruct = {
       _tag: "ListConstruct",
       args: group("{", [literal(1n), literal(2n)]),
       resolved: {
@@ -353,7 +339,7 @@ describe("generateIR", () => {
       }
     }
 
-    const result = generateIR(expr)
+    const result = Applied.generateIR(expr)
 
     expect(result._tag).toBe("Call")
     if (result._tag !== "Call") {
@@ -385,7 +371,7 @@ describe("generateIR", () => {
   })
 
   it("lowers chains into chooseUnit and nested lambda calls", () => {
-    const pingCall: AppliedCall = {
+    const pingCall: Applied.Call = {
       _tag: "Call",
       fn: reference("ping", typedData("Func")),
       args: group("(", []),
@@ -394,7 +380,7 @@ describe("generateIR", () => {
         type: dataType("Unit")
       }
     }
-    const sumAssign: AppliedAssign = {
+    const sumAssign: Applied.Assign = {
       _tag: "Assign",
       name: word("sum"),
       equals: symbol("="),
@@ -408,13 +394,13 @@ describe("generateIR", () => {
         }
       }
     }
-    const expr: AppliedChain = chain(
+    const expr: Applied.Chain = chain(
       [pingCall, sumAssign],
       reference("sum"),
       dataType("Int")
     )
 
-    const result = generateIR(expr)
+    const result = Applied.generateIR(expr)
 
     expect(result._tag).toBe("Call")
     if (result._tag !== "Call") {
@@ -438,7 +424,7 @@ describe("generateIR", () => {
   })
 
   it("lowers nested if/else expressions into thunked ifThenElse calls", () => {
-    const nestedElse: AppliedIfElse = {
+    const nestedElse: Applied.IfElse = {
       _tag: "IfElse",
       if: word("if"),
       condition: reference("otherCond", dataType("Bool")),
@@ -447,7 +433,7 @@ describe("generateIR", () => {
       elseBranch: intBranch(3n),
       resolved: intTyped
     }
-    const expr: AppliedIfElse = {
+    const expr: Applied.IfElse = {
       _tag: "IfElse",
       if: word("if"),
       condition: reference("cond", dataType("Bool")),
@@ -457,7 +443,7 @@ describe("generateIR", () => {
       resolved: intTyped
     }
 
-    const result = generateIR(expr)
+    const result = Applied.generateIR(expr)
 
     expect(result._tag).toBe("Call")
     if (result._tag !== "Call") {
@@ -482,7 +468,7 @@ describe("generateIR", () => {
   })
 
   it("parses raw IR snippets directly", () => {
-    const expr: AppliedRaw = {
+    const expr: Applied.Raw = {
       _tag: "Raw",
       resolved: {
         _tag: "Typed",
@@ -492,7 +478,7 @@ describe("generateIR", () => {
       dependencies: []
     }
 
-    const result = generateIR(expr)
+    const result = Applied.generateIR(expr)
 
     expect(result._tag).toBe("Call")
     if (result._tag !== "Call") {
@@ -501,5 +487,54 @@ describe("generateIR", () => {
 
     expect(irRefName(result.fn)).toBe("addInteger")
     expect(result.args.fields.length).toBe(2)
+  })
+})
+
+describe("generateEntryPointIR", () => {
+  it("wraps parameters and definitions around the entrypoint body", () => {
+    const entryPoint = {
+      _tag: "EntryPoint",
+      parameters: [
+        {
+          path: Untyped.makePath(dummySpan(), "demo::param")
+        } as any
+      ],
+      definitions: [
+        {
+          _tag: "Definition",
+          path: Untyped.makePath(dummySpan(), "demo::def"),
+          expr: literal(5n)
+        } as any
+      ],
+      body: reference("result")
+    } as const
+
+    const ir = Applied.generateEntryPointIR(entryPoint as any)
+
+    expect(ir._tag).toBe("FuncDef")
+    if (ir._tag !== "FuncDef") {
+      throw new Error("expected outer funcdef")
+    }
+
+    expect(ir.args.fields[0]?.value).toBe("demo::param")
+    expect(ir.body.expr._tag).toBe("Call")
+    if (ir.body.expr._tag !== "Call") {
+      throw new Error("expected definition call in body")
+    }
+
+    const defCall = ir.body.expr
+    expect(defCall.fn._tag).toBe("FuncDef")
+    if (defCall.fn._tag !== "FuncDef") {
+      throw new Error("expected definition funcdef")
+    }
+
+    expect(defCall.fn.args.fields[0]?.value).toBe("demo::def")
+    expect(defCall.args.fields[0]?._tag).toBe("Literal")
+    expect(defCall.fn.body.expr._tag).toBe("Reference")
+    if (defCall.fn.body.expr._tag !== "Reference") {
+      throw new Error("expected final body reference")
+    }
+
+    expect(defCall.fn.body.expr.name.value).toBe("result")
   })
 })
