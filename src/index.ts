@@ -3,7 +3,7 @@ export interface Source {
   content: string
 }
 
-export interface CompileOptions {}
+export type CompileOptions = Record<string, never>
 
 export interface UplcScript {
   version: 3
@@ -13,7 +13,7 @@ export interface UplcScript {
 
 export const compile = (
   src: string | Source | string[] | Source[],
-  options: CompileOptions = {}
+  _options: CompileOptions = {}
 ): Record<string, UplcScript> => {
   const srcs: Source[] = Array.isArray(src)
     ? src.map((s) => (typeof s == "string" ? { name: "", content: s } : s))

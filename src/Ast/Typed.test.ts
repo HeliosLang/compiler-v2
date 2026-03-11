@@ -6,7 +6,7 @@ import {
   type DataType,
   type GenericType,
   type Scope,
-  type Path,
+  type Path
 } from "./Typed.js"
 import * as Untyped from "./Untyped.js"
 
@@ -15,7 +15,8 @@ const source = (name: string, content: string) => ({
   content
 })
 
-const makePath = (path: string): Path => Untyped.makePath(Source.DummySpan(), path)
+const makePath = (path: string): Path =>
+  Untyped.makePath(Source.DummySpan(), path)
 
 const dataType = (path: string, appliedTypes?: DataType[]): DataType => ({
   _tag: "DataType",

@@ -59,7 +59,10 @@ export function extendPath(p: Path, name: Token.Word): Path {
   return {
     ...p,
     names: [...p.names, name],
-    separators: [...p.separators, {_tag: "Symbol", value: "::", sourceSpan: name.sourceSpan}]
+    separators: [
+      ...p.separators,
+      { _tag: "Symbol", value: "::", sourceSpan: name.sourceSpan }
+    ]
   }
 }
 
