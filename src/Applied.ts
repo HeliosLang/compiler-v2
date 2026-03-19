@@ -14,15 +14,10 @@ import * as Untyped from "./Untyped.js"
  *   - TypeGuards no longer serve a purpose and are removed
  */
 
-export interface Path extends Typed.Path {
-  /**
-   * Used to target internal auto-generated type methods
-   */
-  readonly component?: string | undefined
-}
+export type Path = Typed.Path
 
 function pathToString(path: Path): string {
-  return `${Typed.pathToString(path)}${path.component !== undefined && path.component !== "" ? `:::${path.component}` : ""}`
+  return Typed.pathToString(path)
 }
 
 function pathScriptName(path: Path): string {
@@ -240,13 +235,7 @@ export type BuildOptions = {
   substituteParams?: Readonly<Record<string, Raw>> | undefined
 }
 
-export type Globals = Record<
-  string,
-  {
-    symbolValue: Typed.SymbolValue
-    implementation?: { ir: string; deps: Path[] }
-  }
->
+export type Globals = Record<string, Typed.SymbolValueWithImplementation>
 
 export function makeBuiltins(
   globals: Globals
@@ -507,15 +496,15 @@ class Applier {
            * For the entrypoint only: all arguments that aren't `Data`-type require the <type>:::from_data internal method
            */
           if (head.expr._tag == "FuncDef") {
-            for (let arg of head.expr.args.fields) {
-              if (arg.type.resolved._tag == "DataType") {
-                dependencies.push(
-                  Untyped.extendPath(arg.type.resolved.path, {
-                    _tag: "Word",
-                    value: ":from_data",
-                    sourceSpan: Typed.sourceSpan(arg.type.type)
-                  })
-                )
+            for (const arg of head.expr.args.fields) {
+              if (
+                arg.type.resolved._tag == "DataType" &&
+                pathToString(arg.type.resolved.path) != "Data"
+              ) {
+                dependencies.push({
+                  ...arg.type.resolved.path,
+                  component: "from_data"
+                })
               }
             }
           }
@@ -657,12 +646,21 @@ class Applier {
       case "Member": {
         const object = this.applyExpression(expr.object)
 
+        const objectDataType = object.applied.resolved.type
+        if (objectDataType._tag != "DataType") {
+          throw new Error("Unexpected")
+        }
+
+        const memberDeps: Typed.Path[] =
+          objectDataType.properties[expr.member.value]?.implementation?.deps ??
+          []
+
         return {
           applied: {
             ...expr,
             object: object.applied
           },
-          dependencies: object.dependencies
+          dependencies: [...object.dependencies, ...memberDeps]
         }
       }
       case "MultiParens": {
@@ -879,8 +877,6 @@ class Applier {
 
   /**
    * @param path
-   * @param component
-   * Used for hidden auto-generated methods (eg. path=`Bool` component=`and`)
    * @returns
    * An InstanceExpression of a symbol, or undefined if the path
    */
@@ -917,7 +913,84 @@ class Applier {
     }
 
     if (path.component !== undefined && path.component !== "") {
-      throw new Error("auto-generated symbol components not yet implemented")
+      if (statement._tag == "Declare") {
+        throw new Error(
+          `component ${path.component} only exists on types, not typed declarations`
+        )
+      }
+
+      const dataType = statement.rhs.resolved
+
+      if (dataType._tag != "DataType") {
+        throw new Error(
+          `component ${path.component} not available in ${dataType._tag}`
+        )
+      }
+
+      if (path.component == "from_data") {
+        if (Object.keys(dataType.variants).length == 0) {
+          return {
+            _tag: "Raw",
+            ir: "unListData",
+            dependencies: [],
+            resolved: {
+              _tag: "Typed",
+              type: {
+                _tag: "FuncType",
+                args: [
+                  {
+                    _tag: "DataType",
+                    path: Untyped.makePath(Source.DummySpan(), "Data"),
+                    properties: {},
+                    variants: {}
+                  }
+                ],
+                returns: dataType
+              }
+            }
+          }
+        } else {
+          return {
+            _tag: "Raw",
+            ir: `(self) -> {sndPair(unConstrData(self))}`,
+            dependencies: [],
+            resolved: {
+              _tag: "Typed",
+              type: {
+                _tag: "FuncType",
+                args: [
+                  {
+                    _tag: "DataType",
+                    path: Untyped.makePath(Source.DummySpan(), "Data"),
+                    properties: {},
+                    variants: {}
+                  }
+                ],
+                returns: dataType
+              }
+            }
+          }
+        }
+      }
+
+      const prop = dataType.properties[path.component]
+
+      if (prop === undefined) {
+        throw new Error(
+          `component ${path.component} undefined in ${pathToString(dataType.path)}`
+        )
+      }
+
+      if (prop.implementation === undefined) {
+        throw new Error(`${pathToString(path)} doesn't have an implementation`)
+      }
+
+      return {
+        _tag: "Raw",
+        ir: prop.implementation.ir,
+        dependencies: prop.implementation.deps,
+        resolved: { _tag: "Typed", type: prop.symbolValue }
+      }
     }
 
     // if the statement is Declare, it must be a parameter
@@ -1705,39 +1778,26 @@ class CodeGenerator {
     )
   }
 
-  member(expr: Member): IR.Call {
+  member(expr: Member): IR.Expression {
     if (expr.object.resolved.type._tag != "DataType") {
       throw new Error("expected member object data type")
     }
 
-    const sourceSpan = expr.member.sourceSpan
+    const prop = expr.object.resolved.type.properties[expr.member.value]
 
-    return {
-      _tag: "Call",
-      fn: {
-        _tag: "Reference",
-        name: {
-          _tag: "Word",
-          value: `${Typed.pathToString(expr.object.resolved.type.path)}::${expr.member.value}`,
-          sourceSpan
-        }
-      },
-      args: {
-        _tag: "Group",
-        open: {
-          _tag: "Symbol",
-          value: "(",
-          sourceSpan
-        },
-        fields: [this.expression(expr.object)],
-        separators: [],
-        close: {
-          _tag: "Symbol",
-          value: ")",
-          sourceSpan
-        }
-      }
+    if (prop === undefined || prop.implementation === undefined) {
+      throw new Error(
+        `missing implementation for member '${expr.member.value}'`
+      )
     }
+
+    return IR.makeCall(
+      IR.parseExpression({
+        name: "member-ir",
+        content: prop.implementation.ir
+      }),
+      [this.expression(expr.object)]
+    )
   }
 
   multiParens(expr: MultiParens): IR.Call {
@@ -1975,7 +2035,7 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
       throw new Error("Unexpected")
     }
 
-    let redeemerExpr = IR.makeBuiltinCall("headList", [
+    const redeemerExpr = IR.makeBuiltinCall("headList", [
       IR.makeBuiltinCall("tailList", [
         IR.makeBuiltinCall("sndPair", [
           IR.makeBuiltinCall("unConstrData", [

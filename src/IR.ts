@@ -113,6 +113,76 @@ export function generateUplc(
   return new Generator().expression(resolveNames(expr, scope), scope)
 }
 
+export interface PrettyOptions {
+  readonly newline?: string | undefined
+  readonly tab?: string | undefined
+}
+
+export function pretty(expr: Expression, options: PrettyOptions = {}): string {
+  const newline = options.newline ?? "\n"
+  const tab = options.tab ?? "  "
+
+  const literal = (value: Uplc.Value): string => {
+    switch (value._tag) {
+      case "Bool":
+        return value.value ? "true" : "false"
+      case "ByteArray":
+        return `#${Array.from(value.value)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("")}`
+      case "Int":
+        return value.value.toString()
+      case "String":
+        return JSON.stringify(value.value)
+      case "Unit":
+        return "()"
+      default:
+        throw new Error(`Unsupported IR literal ${value._tag}`)
+    }
+  }
+
+  const format = (expr: Expression, depth: number): string => {
+    const indent = tab.repeat(depth)
+    const nextIndent = tab.repeat(depth + 1)
+
+    switch (expr._tag) {
+      case "Call": {
+        const fn = format(expr.fn, depth)
+
+        if (expr.args.fields.length == 0) {
+          return `${fn}()`
+        }
+
+        if (newline == "") {
+          return `${fn}(${expr.args.fields.map((arg) => format(arg, depth)).join(", ")})`
+        }
+
+        return `${fn}(${newline}${expr.args.fields
+          .map((arg) => `${nextIndent}${format(arg, depth + 1)}`)
+          .join(`,${newline}`)}${newline}${indent})`
+      }
+      case "Error":
+        return "error()"
+      case "FuncDef": {
+        const args = expr.args.fields.map((arg) => arg.value).join(", ")
+        const body = format(expr.body.expr, depth + 1)
+
+        if (newline == "") {
+          return `(${args}) -> {${format(expr.body.expr, depth)}}`
+        }
+
+        return `(${args}) -> {${newline}${nextIndent}${body}${newline}${indent}}`
+      }
+      case "Literal":
+        return literal(expr.value)
+      case "Reference":
+        return `${expr.name.value}${expr.isSafe === true ? "!" : ""}`
+    }
+  }
+
+  return format(expr, 0)
+}
+
 class Parser {
   parseExpression(r: Reader): Expression {
     const m = r.matches(group("("), symbol("->"))

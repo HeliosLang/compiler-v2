@@ -30,6 +30,12 @@ export interface Typed<T extends Type = Type> {
 
 export type Type = DataType | FuncType
 
+export type SymbolValueWithImplementation<T extends SymbolValue = SymbolValue> =
+  {
+    symbolValue: T
+    implementation?: { ir: string; deps: Path[] }
+  }
+
 export interface DataType {
   readonly _tag: "DataType"
 
@@ -43,7 +49,7 @@ export interface DataType {
   /**
    * Tuple can be encoded by using integer keys
    */
-  readonly properties: Record<string, DataType>
+  readonly properties: Record<string, SymbolValueWithImplementation<DataType>>
 
   readonly variants: Record<string, DataType>
 }
@@ -133,10 +139,16 @@ export interface Path extends Untyped.Path {
    * In therory any Type can be applied to generic functions, but that leads to whole other range of problems
    */
   appliedTypes?: DataType[]
+
+  /**
+   * Used to target internal auto-generated type methods
+   */
+  readonly component?: string | undefined
 }
 
 export function pathToString(path: Path): string {
-  return `${Untyped.pathToString(path)}${path.appliedTypes && path.appliedTypes.length > 0 ? `[${path.appliedTypes.map((t) => pathToString(t.path)).join("][")}]` : ""}`
+  const withoutComponent = `${Untyped.pathToString(path)}${path.appliedTypes && path.appliedTypes.length > 0 ? `[${path.appliedTypes.map((t) => pathToString(t.path)).join("][")}]` : ""}`
+  return `${withoutComponent}${path.component !== undefined && path.component !== "" ? `:::${path.component}` : ""}`
 }
 
 export interface Script extends Omit<Untyped.Script, "statements"> {
@@ -839,6 +851,14 @@ class Resolver {
           ...symbolValue,
           path: symbolPath
         }
+      } else if (
+        symbolValue._tag == "DataType" &&
+        symbolValue.path.names.length == 0
+      ) {
+        symbolValue = {
+          ...symbolValue,
+          path: symbolPath
+        }
       }
 
       scope = addToScope(scope, untyped.name, symbolValue)
@@ -1005,11 +1025,18 @@ class Resolver {
   private resolveEnum(untyped: Untyped.Enum, scope: Scope): Enum {
     const variants = Object.fromEntries(
       untyped.variants.map((variant) => {
-        const properties: Record<string, DataType> = {}
+        const properties: Record<
+          string,
+          SymbolValueWithImplementation<DataType>
+        > = {}
+
+        let ir = "self"
 
         for (const field of variant.fields) {
-          const resolved = this.resolveTypeExpression(field.type.type, scope)
-            .resolved
+          const resolved = this.resolveTypeExpression(
+            field.type.type,
+            scope
+          ).resolved
 
           if (!isDataType(resolved)) {
             throw new CompilerError.Type(
@@ -1018,7 +1045,20 @@ class Resolver {
             )
           }
 
-          properties[field.name.value] = resolved
+          const fromDataPath: Path = {
+            ...resolved.path,
+            component: "from_data"
+          }
+
+          properties[field.name.value] = {
+            symbolValue: resolved,
+            implementation: {
+              ir: `(self) -> {${pathToString(fromDataPath)}(headList(${ir}))}`,
+              deps: [fromDataPath]
+            }
+          }
+
+          ir = `tailList(${ir})`
         }
 
         return [
@@ -1266,7 +1306,7 @@ class Resolver {
           type: resolvedTypeExpr,
           args: {
             ...untyped.args,
-            fields: values.map((v, i) => ({
+            fields: values.map((v) => ({
               value: v
             }))
           },
@@ -1655,7 +1695,7 @@ class Resolver {
     }
 
     const memberType =
-      object.resolved.type.properties[untyped.member.value] ??
+      object.resolved.type.properties[untyped.member.value]?.symbolValue ??
       object.resolved.type.variants[untyped.member.value]
 
     if (memberType === undefined) {
@@ -1906,10 +1946,18 @@ class Resolver {
   }
 
   private resolveStruct(untyped: Untyped.Struct, scope: Scope): Struct {
-    const properties: Record<string, DataType> = {}
+    const properties: Record<
+      string,
+      SymbolValueWithImplementation<DataType>
+    > = {}
+
+    let ir = "self"
 
     for (const field of untyped.fields) {
-      const resolved = this.resolveTypeExpression(field.type.type, scope).resolved
+      const resolved = this.resolveTypeExpression(
+        field.type.type,
+        scope
+      ).resolved
 
       if (!isDataType(resolved)) {
         throw new CompilerError.Type(
@@ -1918,7 +1966,20 @@ class Resolver {
         )
       }
 
-      properties[field.name.value] = resolved
+      const fromDataPath: Path = {
+        ...resolved.path,
+        component: "from_data"
+      }
+
+      properties[field.name.value] = {
+        symbolValue: resolved,
+        implementation: {
+          ir: `(self) -> {${pathToString(fromDataPath)}(headList(${ir}))}`,
+          deps: [fromDataPath]
+        }
+      }
+
+      ir = `tailList(${ir})`
     }
 
     return {
@@ -1927,7 +1988,7 @@ class Resolver {
         _tag: "DataType",
         path: {
           _tag: "Path",
-          names: [untyped.struct],
+          names: [],
           separators: []
         },
         properties,

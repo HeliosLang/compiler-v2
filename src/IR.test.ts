@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { generateUplc, parse, resolveNames } from "./IR.js"
+import { generateUplc, parse, pretty, resolveNames } from "./IR.js"
 
 const source = (content: string) => ({
   name: "IR.test",
@@ -230,5 +230,30 @@ describe("IR generateUplc", () => {
     const term = generateUplc(parse(source("error()")))
 
     expect(term._tag).toBe("Error")
+  })
+})
+
+describe("IR pretty", () => {
+  it("formats expressions as compact single-line IR", () => {
+    const expr = parse(source("(a, b)->{addInteger(a, b)}"))
+
+    expect(pretty(expr, { newline: "", tab: "" })).toBe(
+      "(a, b) -> {addInteger(a, b)}"
+    )
+  })
+
+  it("formats expressions with configurable newlines and tabs", () => {
+    const expr = parse(source("(a, b)->{addInteger(a, b)}"))
+
+    expect(pretty(expr, { newline: "\n", tab: "    " })).toBe(
+      [
+        "(a, b) -> {",
+        "    addInteger(",
+        "        a,",
+        "        b",
+        "    )",
+        "}"
+      ].join("\n")
+    )
   })
 })

@@ -87,7 +87,7 @@ const group = <Kind extends "(" | "[" | "{", Field>(
 
 const typedData = (
   name: string,
-  properties: Record<string, Typed.DataType> = {},
+  properties: Record<string, { symbolValue: Typed.DataType }> = {},
   appliedTypes?: Typed.DataType[]
 ): Typed.DataType => ({
   _tag: "DataType",
@@ -285,8 +285,8 @@ describe("parseEntryPoints", () => {
 describe("generateIR", () => {
   it("reorders keyed constructor args to the underlying property order", () => {
     const pairType = typedData("Pair", {
-      first: dataType("Int"),
-      second: dataType("Int")
+      first: { symbolValue: dataType("Int") },
+      second: { symbolValue: dataType("Int") }
     })
     const expr: Applied.Construct = {
       _tag: "Construct",
