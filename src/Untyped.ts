@@ -368,6 +368,20 @@ export interface Struct {
   readonly close: Token.Symbol<"}">
 }
 
+export interface Switch {
+  readonly _tag: "Switch"
+  readonly switch: Token.Word<"switch">
+  readonly group: Token.Group<"{", {
+    destruct?: {
+      name: Token.Word
+      colon: Token.Symbol<":">
+    }
+    variant: Token.Word
+    arrow: Token.Symbol<"->">,
+    body: Expression
+  }>
+}
+
 export type TemplateString = Token.TemplateString<Expression>
 
 export interface UnaryOp {
