@@ -175,6 +175,40 @@ describe("parseScript", () => {
     expect(expr.fields[1]?.key?.value).toBe("flag")
   })
 
+  it("parses switch expressions", () => {
+    const ast = parseScript(
+      source(`module sample value = switch {Ok -> 1, Err -> fail, else -> 0}`)
+    )
+
+    const stmt = ast.statements[0]
+    expect(stmt?._tag).toBe("Assign")
+    if (stmt?._tag !== "Assign") {
+      throw new Error("expected Assign statement")
+    }
+
+    const expr = stmt.rhs
+    expect(expr._tag).toBe("Switch")
+    if (expr._tag !== "Switch") {
+      throw new Error("expected Switch expression")
+    }
+
+    expect(expr.group.fields.map((field) => field.variant.value)).toEqual([
+      "Ok",
+      "Err",
+      "else"
+    ])
+    expect(expr.group.fields[0]?.arrow.value).toBe("->")
+    expect(expr.group.fields[0]?.body._tag).toBe("Literal")
+    expect(expr.group.fields[1]?.body._tag).toBe("Reference")
+    expect(expr.group.fields[2]?.body._tag).toBe("Literal")
+  })
+
+  it("throws when switch else variant is not last", () => {
+    expect(() =>
+      parseScript(source(`module sample value = switch {else -> 0, Ok -> 1}`))
+    ).toThrow(/else.*last/i)
+  })
+
   it("parses import + export declare with construct expression", () => {
     const ast = parseScript(
       source(`module sample import A::B; export out: mk(1){x: 2}`)

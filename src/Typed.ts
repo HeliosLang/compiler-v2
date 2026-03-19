@@ -970,6 +970,11 @@ class Resolver {
         return this.resolveReference(expr, scope)
       case "Struct":
         return this.resolveStruct(expr, scope)
+      case "Switch":
+        throw new CompilerError.Syntax(
+          Untyped.sourceSpan(expr),
+          "switch expressions are not supported beyond parsing yet"
+        )
       case "TemplateString":
         return this.resolveTemplateString(expr, scope)
       case "UnaryOp":

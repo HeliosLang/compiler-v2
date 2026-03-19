@@ -371,15 +371,14 @@ export interface Struct {
 export interface Switch {
   readonly _tag: "Switch"
   readonly switch: Token.Word<"switch">
-  readonly group: Token.Group<"{", {
-    destruct?: {
-      name: Token.Word
-      colon: Token.Symbol<":">
+  readonly group: Token.Group<
+    "{",
+    {
+      variant: Token.Word
+      arrow: Token.Symbol<"->">
+      body: Expression
     }
-    variant: Token.Word
-    arrow: Token.Symbol<"->">,
-    body: Expression
-  }>
+  >
 }
 
 export type TemplateString = Token.TemplateString<Expression>
@@ -409,6 +408,7 @@ export type Expression =
   | Parens
   | Reference
   | Struct
+  | Switch
   | TemplateString
   | UnaryOp
 
@@ -461,6 +461,8 @@ export function sourceSpan(node: Path | Expression): Source.Span {
       return sourceSpan(node.path)
     case "Struct":
       return node.struct.sourceSpan
+    case "Switch":
+      return Source.mergeSpan(node.switch.sourceSpan, node.group.close.sourceSpan)
     case "TemplateString":
       return node.sourceSpan
     case "UnaryOp":
@@ -767,6 +769,11 @@ class Parser {
       return this.parseStruct(structWord, r)
     }
 
+    const switchWord = r.matches(word("switch"))
+    if (switchWord !== undefined) {
+      return this.parseSwitch(switchWord, r)
+    }
+
     const chain = r.matches(group("{"))
     if (chain !== undefined) {
       return this.parseChainFromGroup(chain)
@@ -838,6 +845,51 @@ class Parser {
         }
       }),
       close: fieldsGroup.close
+    }
+  }
+
+  private parseSwitch(switchWord: Token.Word<"switch">, r: Reader): Switch {
+    const casesGroup = r.matches(group("{"))
+
+    if (casesGroup === undefined) {
+      throw r.syntaxError(`Expected '{' after 'switch'`)
+    }
+
+    return {
+      _tag: "Switch",
+      switch: switchWord,
+      group: {
+        _tag: "Group",
+        open: casesGroup.open,
+        separators: casesGroup.separators,
+        close: casesGroup.close,
+        fields: casesGroup.fields.map((field, i) => {
+          const m = field.matches(oneOf([anyName, word("else")]), symbol("->"))
+
+          if (m === undefined) {
+            throw field.syntaxError(`Expected '<Variant> -> <expression>'`)
+          }
+
+          if (
+            m[0].value == "else" &&
+            i < casesGroup.fields.length - 1
+          ) {
+            throw new CompilerError.Syntax(
+              m[0].sourceSpan,
+              "'else' variant must come last"
+            )
+          }
+
+          const body = this.parseExpression(field)
+          field.end()
+
+          return {
+            variant: m[0],
+            arrow: m[1],
+            body
+          }
+        })
+      }
     }
   }
 
