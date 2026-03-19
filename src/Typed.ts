@@ -385,6 +385,7 @@ export type Expression =
   | Call
   | Chain
   | Construct
+  | Enum
   | FuncDecl
   | FuncDef
   | Generic
@@ -396,6 +397,7 @@ export type Expression =
   | MultiParens
   | Reference
   | SingleParens
+  | Struct
   | TemplateString
   | UnaryOp
 
@@ -419,10 +421,12 @@ export type InstanceExpression =
 
 export type TypeExpression =
   | Apply<Type>
+  | Enum
   | FuncDecl
   | MultiParens<DataType>
   | Reference<Type>
   | SingleParens<Type>
+  | Struct
 
 type TopAssignRhsFirstPass = Exclude<Expression, FuncDef> | FuncDefFirstPass
 
@@ -452,6 +456,8 @@ export function sourceSpan(node: Path | Expression): Source.Span {
         node.args.open.sourceSpan,
         node.args.close.sourceSpan
       )
+    case "Enum":
+      return node.enum.sourceSpan
     case "FuncDecl":
       return node.arrow.sourceSpan
     case "FuncDef":
@@ -483,6 +489,8 @@ export function sourceSpan(node: Path | Expression): Source.Span {
       return sourceSpan(node.path)
     case "SingleParens":
       return Source.mergeSpan(node.open.sourceSpan, node.close.sourceSpan)
+    case "Struct":
+      return node.struct.sourceSpan
     case "TemplateString":
       return node.sourceSpan
     case "UnaryOp":
@@ -922,6 +930,8 @@ class Resolver {
         return this.resolveChain(expr, scope)
       case "Construct":
         return this.resolveConstruct(expr, scope)
+      case "Enum":
+        return this.resolveEnum(expr, scope)
       case "FuncDecl":
         return this.resolveFuncDecl(expr, scope)
       case "FuncDef":
@@ -938,6 +948,8 @@ class Resolver {
         return this.resolveParens(expr, scope)
       case "Reference":
         return this.resolveReference(expr, scope)
+      case "Struct":
+        return this.resolveStruct(expr, scope)
       case "TemplateString":
         return this.resolveTemplateString(expr, scope)
       case "UnaryOp":
@@ -987,6 +999,56 @@ class Resolver {
         fields: args
       },
       resolved: gtype.resolved.type(dataTypeArgs)
+    }
+  }
+
+  private resolveEnum(untyped: Untyped.Enum, scope: Scope): Enum {
+    const variants = Object.fromEntries(
+      untyped.variants.map((variant) => {
+        const properties: Record<string, DataType> = {}
+
+        for (const field of variant.fields) {
+          const resolved = this.resolveTypeExpression(field.type.type, scope)
+            .resolved
+
+          if (!isDataType(resolved)) {
+            throw new CompilerError.Type(
+              Untyped.sourceSpan(field.type.type),
+              "Enum variant fields must be data types"
+            )
+          }
+
+          properties[field.name.value] = resolved
+        }
+
+        return [
+          variant.name.value,
+          {
+            _tag: "DataType",
+            path: {
+              _tag: "Path",
+              names: [variant.name],
+              separators: []
+            },
+            properties,
+            variants: {}
+          } satisfies DataType
+        ]
+      })
+    )
+
+    return {
+      ...untyped,
+      resolved: {
+        _tag: "DataType",
+        path: {
+          _tag: "Path",
+          names: [untyped.enum],
+          separators: []
+        },
+        properties: {},
+        variants
+      }
     }
   }
 
@@ -1843,6 +1905,37 @@ class Resolver {
     }
   }
 
+  private resolveStruct(untyped: Untyped.Struct, scope: Scope): Struct {
+    const properties: Record<string, DataType> = {}
+
+    for (const field of untyped.fields) {
+      const resolved = this.resolveTypeExpression(field.type.type, scope).resolved
+
+      if (!isDataType(resolved)) {
+        throw new CompilerError.Type(
+          Untyped.sourceSpan(field.type.type),
+          "Struct fields must be data types"
+        )
+      }
+
+      properties[field.name.value] = resolved
+    }
+
+    return {
+      ...untyped,
+      resolved: {
+        _tag: "DataType",
+        path: {
+          _tag: "Path",
+          names: [untyped.struct],
+          separators: []
+        },
+        properties,
+        variants: {}
+      }
+    }
+  }
+
   private resolveUnaryOp(untyped: Untyped.UnaryOp, scope: Scope): UnaryOp {
     const right = this.resolveInstanceExpression(untyped.right, scope)
 
@@ -1937,6 +2030,12 @@ class Resolver {
             "Expected Instance, got Type"
           )
         }
+      case "Enum":
+      case "Struct":
+        throw new CompilerError.Type(
+          Untyped.sourceSpan(untyped),
+          "Expected Instance, got Type"
+        )
     }
   }
 
@@ -2006,6 +2105,9 @@ class Resolver {
             "Expected Type, got Instance"
           )
         }
+      case "Enum":
+      case "Struct":
+        return expr
     }
   }
 

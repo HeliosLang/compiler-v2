@@ -150,6 +150,31 @@ describe("parseScript", () => {
     expect(expr.returns._tag).toBe("Reference")
   })
 
+  it("parses struct as a primary expression", () => {
+    const ast = parseScript(
+      source(`module sample value: struct { count: Int, flag: Bool "flag" }`)
+    )
+
+    const declare = ast.statements[0]
+    if (declare?._tag !== "Declare") {
+      throw new Error("expected Declare statement")
+    }
+
+    const expr = declare.type.type
+    expect(expr._tag).toBe("Struct")
+    if (expr._tag !== "Struct") {
+      throw new Error("expected Struct expression")
+    }
+
+    expect(expr.fields.map((field) => field.name.value)).toEqual([
+      "count",
+      "flag"
+    ])
+    expect(expr.fields[0]?.type.type._tag).toBe("Reference")
+    expect(expr.fields[0]?.key).toBeUndefined()
+    expect(expr.fields[1]?.key?.value).toBe("flag")
+  })
+
   it("parses import + export declare with construct expression", () => {
     const ast = parseScript(
       source(`module sample import A::B; export out: mk(1){x: 2}`)

@@ -385,6 +385,7 @@ export type Expression =
   | Call
   | Chain
   | Construct
+  | Enum
   | FuncDecl
   | FuncDef
   | Generic
@@ -393,6 +394,7 @@ export type Expression =
   | Member
   | Parens
   | Reference
+  | Struct
   | TemplateString
   | UnaryOp
 
@@ -422,6 +424,8 @@ export function sourceSpan(node: Path | Expression): Source.Span {
         node.args.open.sourceSpan,
         node.args.close.sourceSpan
       )
+    case "Enum":
+      return node.enum.sourceSpan
     case "FuncDecl":
       return node.arrow.sourceSpan
     case "FuncDef":
@@ -441,6 +445,8 @@ export function sourceSpan(node: Path | Expression): Source.Span {
       )
     case "Reference":
       return sourceSpan(node.path)
+    case "Struct":
+      return node.struct.sourceSpan
     case "TemplateString":
       return node.sourceSpan
     case "UnaryOp":
@@ -742,6 +748,11 @@ class Parser {
       }
     }
 
+    const structWord = r.matches(word("struct"))
+    if (structWord !== undefined) {
+      return this.parseStruct(structWord, r)
+    }
+
     const chain = r.matches(group("{"))
     if (chain !== undefined) {
       return this.parseChainFromGroup(chain)
@@ -778,6 +789,42 @@ class Parser {
     }
 
     throw r.syntaxError(`Expected expression`)
+  }
+
+  private parseStruct(structWord: Token.Word<"struct">, r: Reader): Struct {
+    const fieldsGroup = r.matches(group("{"))
+
+    if (fieldsGroup === undefined) {
+      throw r.syntaxError(`Expected '{' after 'struct'`)
+    }
+
+    return {
+      _tag: "Struct",
+      struct: structWord,
+      open: fieldsGroup.open,
+      fields: fieldsGroup.fields.map((field) => {
+        const m = field.matches(anyName, symbol(":"))
+
+        if (m === undefined) {
+          throw field.syntaxError(`Expected '<name>: <type>'`)
+        }
+
+        const type = {
+          colon: m[1],
+          type: this.parseExpression(field)
+        }
+        const key = field.matches(str())
+
+        field.end()
+
+        return {
+          name: m[0],
+          type,
+          key
+        }
+      }),
+      close: fieldsGroup.close
+    }
   }
 
   private parseIfElse(ifWord: Token.Word<"if">, r: Reader): IfElse {
