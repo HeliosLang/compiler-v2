@@ -164,12 +164,54 @@ function makeGlobals(): Applied.Globals {
     Bool: {
       symbolValue: boolType
     },
+    "Bool:::from_data": {
+      ...makeFunc("Bool:::from_data", [dataType], boolType),
+      implementation: {
+        ir: "(data) -> {equalsInteger(sndPair(unConstrData(data)),1)}",
+        deps: []
+      }
+    },
     Int: { symbolValue: intType },
+    "Int:::from_data": {
+      ...makeFunc("Int:::from_data", [dataType], intType),
+      implementation: {
+        ir: "unIData",
+        deps: []
+      }
+    },
     ByteArray: { symbolValue: byteArrayType },
+    "ByteArray:::from_data": {
+      ...makeFunc("ByteArray:::from_data", [dataType], byteArrayType),
+      implementation: {
+        ir: "unBData",
+        deps: []
+      }
+    },
     String: { symbolValue: stringType },
+    "String:::from_data": {
+      ...makeFunc("String:::from_data", [dataType], stringType),
+      implementation: {
+        ir: "(data) -> {decodeUtf8(unBData(data))}",
+        deps: []
+      }
+    },
     Real: { symbolValue: realType },
+    "Real:::from_data": {
+      ...makeFunc("Real:::from_data", [dataType], realType),
+      implementation: {
+        ir: "unIData",
+        deps: []
+      }
+    },
     Unit: { symbolValue: unitType },
     Data: { symbolValue: dataType },
+    "Data:::from_data": {
+      ...makeFunc("Data:::from_data", [dataType], dataType),
+      implementation: {
+        ir: "(data) -> {data}",
+        deps: []
+      }
+    },
     Bls12_381_G1Element: { symbolValue: bls12_381_G1ElementType },
     Bls12_381_G2Element: { symbolValue: bls12_381_G2ElementType },
     Bls12_381_MlResult: { symbolValue: bls12_381_MlResultType },

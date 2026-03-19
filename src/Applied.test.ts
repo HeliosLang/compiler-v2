@@ -21,6 +21,21 @@ const addIntegerType: Typed.FuncType = {
 const globals: Applied.Globals = {
   Bool: { symbolValue: dataType("Bool") },
   Int: { symbolValue: dataType("Int") },
+  "Int:::from_data": {
+    symbolValue: {
+      _tag: "Typed",
+      path: Untyped.makePath(Source.DummySpan(), "Int:::from_data"),
+      type: {
+        _tag: "FuncType",
+        args: [dataType("Data")],
+        returns: dataType("Int")
+      }
+    },
+    implementation: {
+      ir: "unIData",
+      deps: []
+    }
+  },
   ByteArray: { symbolValue: dataType("ByteArray") },
   String: { symbolValue: dataType("String") },
   Real: { symbolValue: dataType("Real") },
@@ -495,6 +510,7 @@ describe("generateEntryPointIR", () => {
     const entryPoint: Applied.EntryPoint = {
       _tag: "EntryPoint",
       parameters: [Untyped.makePath(dummySpan(), "demo::param")],
+      isValidator: false,
       definitions: [
         {
           _tag: "Definition",
@@ -513,12 +529,21 @@ describe("generateEntryPointIR", () => {
     }
 
     expect(ir.args.fields[0]?.value).toBe("demo::param")
-    expect(ir.body.expr._tag).toBe("Call")
-    if (ir.body.expr._tag !== "Call") {
+    expect(ir.body.expr._tag).toBe("FuncDef")
+    if (ir.body.expr._tag !== "FuncDef") {
+      throw new Error("expected scriptContextData funcdef")
+    }
+
+    const scriptContextDataFunc = ir.body.expr
+    expect(scriptContextDataFunc.args.fields[0]?.value).toBe(
+      "scriptContextData"
+    )
+    expect(scriptContextDataFunc.body.expr._tag).toBe("Call")
+    if (scriptContextDataFunc.body.expr._tag !== "Call") {
       throw new Error("expected definition call in body")
     }
 
-    const defCall = ir.body.expr
+    const defCall = scriptContextDataFunc.body.expr
     expect(defCall.fn._tag).toBe("FuncDef")
     if (defCall.fn._tag !== "FuncDef") {
       throw new Error("expected definition funcdef")

@@ -30,7 +30,10 @@ describe("indexByteString", () => {
   }
 
   function evalFib(script: Uplc.Script.Script<3>, n: bigint): Uplc.Cek.Value {
-    const result = runSync(Uplc.Script.eval(script, [n]))
+    // the first argument is a dummy scriptcontext
+    const result = runSync(
+      Uplc.Script.eval(script, [{ data: { int: 0n } }, { data: { int: n } }])
+    )
 
     if (result.value._tag == "Left") {
       throw new Error(result.value.left.error)

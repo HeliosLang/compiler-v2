@@ -183,21 +183,44 @@ export interface Chain {
 /**
  * The `key` must be a Reference expression with a single word Path in all cases except Map construction
  */
-export interface Construct {
+export interface Construct<
+  T extends
+    | { readonly value: Expression }
+    | {
+        readonly property: {
+          key: Expression
+          colon: Token.Symbol<":">
+        }
+        readonly value: Expression
+      } =
+    | { readonly value: Expression }
+    | {
+        readonly property: {
+          key: Expression
+          colon: Token.Symbol<":">
+        }
+        readonly value: Expression
+      }
+> {
   readonly _tag: "Construct"
   readonly type: Expression
-  readonly args: Token.Group<
-    "{",
-    {
-      readonly property?:
-        | {
-            key: Expression
-            colon: Token.Symbol<":">
-          }
-        | undefined
-      readonly value: Expression
-    }
-  >
+  readonly args: Token.Group<"{", T>
+}
+
+export function isKeysConstruct(c: Construct): c is Construct<{
+  readonly property: {
+    key: Expression
+    colon: Token.Symbol<":">
+  }
+  readonly value: Expression
+}> {
+  return c.args.fields.every((f) => "property" in f)
+}
+
+export function isPositionalConstruct(
+  c: Construct
+): c is Construct<{ readonly value: Expression }> {
+  return c.args.fields.every((f) => !("property" in f))
 }
 
 /**
@@ -312,6 +335,22 @@ export interface Parens {
 export interface Reference {
   readonly _tag: "Reference"
   readonly path: Path
+}
+
+export function isSingleWordReference(expr: Expression): expr is Reference {
+  return expr._tag == "Reference" && expr.path.names.length == 1
+}
+
+/**
+ * Used by key-Construct
+ * @param expr
+ */
+export function extractSingleWordFromReference(expr: Expression): Token.Word {
+  if (isSingleWordReference(expr)) {
+    return expr.path.names[0]
+  } else {
+    throw new Error("Expected Reference expression with a single word ")
+  }
 }
 
 /**

@@ -70,6 +70,11 @@ export interface EntryPoint {
   readonly definitions: Definition[]
 
   /**
+   * True for main in validator script, false for any other function or symbol
+   */
+  readonly isValidator: boolean
+
+  /**
    * For validators this will be a call of a FuncDef with a redeemer
    */
   readonly body: Expression
@@ -144,7 +149,10 @@ export interface FuncDef extends Omit<
   Typed.FuncDef,
   "args" | "returns" | "body"
 > {
-  readonly args: Token.Group<"(", Token.Word>
+  readonly args: Token.Group<
+    "(",
+    { name: Token.Word; colon: Token.Symbol<":">; type: Typed.Type }
+  > // Type is still needed for correct IR generation
   readonly body: Expression
 }
 
@@ -321,7 +329,10 @@ export function buildEntryPoints(
       if (script.kind.value == "validator" && statement.name.value == "main") {
         const symbolPath = Untyped.extendPath(script.path, statement.name)
 
-        result[pathToString(symbolPath)] = applier.applyEntryPoint(symbolPath)
+        result[pathToString(symbolPath)] = {
+          ...applier.applyEntryPoint(symbolPath),
+          isValidator: true
+        }
       } else if (compileFunctions && statement.rhs._tag == "FuncDef") {
         const symbolPath = Untyped.extendPath(script.path, statement.name)
 
@@ -385,7 +396,7 @@ class Applier {
     }
 
     definitions = definitions.filter(
-      (d) => pathToString(d.path) == pathToString(entryPointPath)
+      (d) => pathToString(d.path) != pathToString(entryPointPath)
     )
 
     return {
@@ -396,6 +407,7 @@ class Applier {
         return declare.path
       }),
       definitions,
+      isValidator: false, // determined by caller
       body: entryPointDef.expr
     }
   }
@@ -483,11 +495,31 @@ class Applier {
       { path: entryPointPath, expr: entryPoint }
     ]
     let head = stack.pop()
+    let isEntryPoint = true
 
     while (head !== undefined) {
       const headPathStr = pathToString(head.path)
       if (!(headPathStr in definitions)) {
         const { applied, dependencies } = this.applyExpression(head.expr)
+
+        if (isEntryPoint) {
+          /**
+           * For the entrypoint only: all arguments that aren't `Data`-type require the <type>:::from_data internal method
+           */
+          if (head.expr._tag == "FuncDef") {
+            for (let arg of head.expr.args.fields) {
+              if (arg.type.resolved._tag == "DataType") {
+                dependencies.push(
+                  Untyped.extendPath(arg.type.resolved.path, {
+                    _tag: "Word",
+                    value: ":from_data",
+                    sourceSpan: Typed.sourceSpan(arg.type.type)
+                  })
+                )
+              }
+            }
+          }
+        }
 
         definitions[headPathStr] = {
           _tag: "Definition",
@@ -513,6 +545,7 @@ class Applier {
       }
 
       head = stack.pop()
+      isEntryPoint = false
     }
 
     return definitions
@@ -527,6 +560,8 @@ class Applier {
     dependencies: Path[]
   } {
     switch (expr._tag) {
+      case "Apply":
+        throw new Error("not yet implemented")
       case "BinaryOp": {
         const left = this.applyExpression(expr.left)
         const right = this.applyExpression(expr.right)
@@ -766,7 +801,11 @@ class Applier {
         _tag: "FuncDef",
         args: {
           ...expr.args,
-          fields: expr.args.fields.map((a) => a.name)
+          fields: expr.args.fields.map((a) => ({
+            name: a.name,
+            colon: a.type.colon,
+            type: a.type.resolved
+          }))
         },
         arrow: expr.arrow,
         body: body.applied,
@@ -1331,7 +1370,7 @@ class CodeGenerator {
       _tag: "FuncDef",
       args: {
         ...expr.args,
-        fields: expr.args.fields
+        fields: expr.args.fields.map((f) => f.name)
       },
       arrow: expr.arrow,
       body: {
@@ -1930,6 +1969,65 @@ export function generateIR(expr: Expression): IR.Expression {
 export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
   let result = generateIR(entryPoint.body)
 
+  // wrap with data conversion of args
+  if (entryPoint.isValidator) {
+    if (entryPoint.body._tag != "FuncDef") {
+      throw new Error("Unexpected")
+    }
+
+    let redeemerExpr = IR.makeBuiltinCall("headList", [
+      IR.makeBuiltinCall("tailList", [
+        IR.makeBuiltinCall("sndPair", [
+          IR.makeBuiltinCall("unConstrData", [
+            IR.makeReference("scriptContextData")
+          ])
+        ])
+      ])
+    ])
+
+    const redeemerArg = entryPoint.body.args.fields[0]
+    if (redeemerArg.type._tag != "DataType") {
+      throw new Error("Unexpected")
+    }
+
+    if (pathToString(redeemerArg.type.path) != "Data") {
+      result = IR.makeCall(
+        IR.makeReference(
+          pathToString(redeemerArg.type.path) + "::" + ":from_data"
+        ),
+        [redeemerExpr]
+      )
+    }
+
+    // wrap with a call with the redeemer arg (headList(tailList(sndPair(unConstrData(scriptContextData)))))
+    result = IR.makeCall(result, [redeemerExpr])
+  } else if (
+    entryPoint.body._tag == "FuncDef" &&
+    entryPoint.body.args.fields.some(
+      (f) => f.type._tag == "DataType" && pathToString(f.type.path) != "Data"
+    )
+  ) {
+    result = IR.makeCall(
+      result,
+      entryPoint.body.args.fields.map((f) => {
+        if (f.type._tag == "DataType" && pathToString(f.type.path) != "Data") {
+          return IR.makeCall(
+            IR.makeReference(pathToString(f.type.path) + "::" + ":from_data"),
+            [IR.makeReference(f.name.value)]
+          )
+        } else {
+          return IR.makeReference(f.name.value)
+        }
+      })
+    )
+
+    result = IR.makeFuncDef(
+      entryPoint.body.args.fields.map((f) => f.name.value),
+      result,
+      true
+    )
+  }
+
   for (let i = entryPoint.definitions.length - 1; i >= 0; i--) {
     const definition = entryPoint.definitions[i]
 
@@ -1944,6 +2042,9 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
     )
   }
 
+  // wrap with scriptContextData here
+  result = IR.makeFuncDef(["scriptContextData"], result, true)
+
   for (let i = entryPoint.parameters.length - 1; i >= 0; i--) {
     const parameter = entryPoint.parameters[i]
 
@@ -1951,7 +2052,7 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
       continue
     }
 
-    result = wrapWithFuncDef(pathToString(parameter), result)
+    result = IR.makeFuncDef([pathToString(parameter)], result, true)
   }
 
   return result
@@ -2020,53 +2121,6 @@ function wrapWithDefinition(
       close: {
         _tag: "Symbol",
         value: ")",
-        sourceSpan
-      }
-    }
-  }
-}
-
-function wrapWithFuncDef(name: string, body: IR.Expression): IR.Expression {
-  const sourceSpan = Source.DummySpan()
-
-  return {
-    _tag: "FuncDef",
-    args: {
-      _tag: "Group",
-      open: {
-        _tag: "Symbol",
-        value: "(",
-        sourceSpan
-      },
-      fields: [
-        {
-          _tag: "Word",
-          value: name,
-          sourceSpan
-        }
-      ],
-      separators: [],
-      close: {
-        _tag: "Symbol",
-        value: ")",
-        sourceSpan
-      }
-    },
-    arrow: {
-      _tag: "Symbol",
-      value: "->",
-      sourceSpan
-    },
-    body: {
-      open: {
-        _tag: "Symbol",
-        value: "{",
-        sourceSpan
-      },
-      expr: body,
-      close: {
-        _tag: "Symbol",
-        value: "}",
         sourceSpan
       }
     }

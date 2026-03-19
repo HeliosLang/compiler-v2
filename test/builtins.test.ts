@@ -26,7 +26,8 @@ function evalEntryPoint(
     throw new Error(`expected ${entryPointName} entrypoint`)
   }
 
-  const result = runSync(Uplc.Script.eval(main, []))
+  // the first argument is a dummy script context
+  const result = runSync(Uplc.Script.eval(main, [{ data: { int: 0n } }]))
 
   if (result.value._tag == "Left") {
     throw new Error(result.value.left.error)

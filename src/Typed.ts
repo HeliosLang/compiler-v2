@@ -48,6 +48,30 @@ export interface DataType {
   readonly variants: Record<string, DataType>
 }
 
+const anyType: DataType = {
+  _tag: "DataType",
+  path: {
+    _tag: "Path",
+    names: [],
+    separators: []
+  },
+  properties: {},
+  variants: {}
+}
+
+const anyTyped: Typed<DataType> = {
+  _tag: "Typed",
+  type: anyType
+}
+
+function isAny(typed: Typed): typed is Typed<DataType> {
+  return typed == anyTyped
+}
+
+function isAnyType(type: Type): type is DataType {
+  return type == anyType
+}
+
 function isBool(typed: Typed): typed is Typed<DataType> {
   return isBoolType(typed.type)
 }
@@ -81,7 +105,7 @@ export interface FuncType {
 export interface GenericType {
   readonly _tag: "GenericType"
   readonly nArgs: number
-  readonly type: (args: DataType[]) => Type
+  readonly type: (args: DataType[]) => Type | Typed
 }
 
 function isInstanceOf(typed: Typed, type: Type) {
@@ -156,10 +180,21 @@ export interface Declare extends Omit<Untyped.Declare, "type"> {
   readonly path: Path
 }
 
-export interface Apply extends Omit<Untyped.Apply, "gtype" | "args"> {
+export interface Apply<T extends Type | Typed = Type | Typed> extends Omit<
+  Untyped.Apply,
+  "gtype" | "args"
+> {
   readonly gtype: Expression
   readonly args: Token.Group<"[", Expression>
-  readonly resolved: Type
+  readonly resolved: T
+}
+
+function isTypeApply(apply: Apply): apply is Apply<Type> {
+  return isType(apply.resolved)
+}
+
+function isInstanceApply(apply: Apply): apply is Apply<Typed> {
+  return apply.resolved._tag == "Typed"
 }
 
 export interface BinaryOp extends Omit<Untyped.BinaryOp, "left" | "right"> {
@@ -365,6 +400,7 @@ export type Expression =
   | UnaryOp
 
 export type InstanceExpression =
+  | Apply<Typed>
   | BinaryOp
   | Call
   | Chain
@@ -382,13 +418,77 @@ export type InstanceExpression =
   | UnaryOp
 
 export type TypeExpression =
-  | Apply
+  | Apply<Type>
   | FuncDecl
   | MultiParens<DataType>
   | Reference<Type>
   | SingleParens<Type>
 
 type TopAssignRhsFirstPass = Exclude<Expression, FuncDef> | FuncDefFirstPass
+
+export function sourceSpan(node: Path | Expression): Source.Span {
+  switch (node._tag) {
+    case "Path":
+      return Source.mergeSpan(
+        node.names[0].sourceSpan,
+        node.names[node.names.length - 1].sourceSpan
+      )
+    case "Apply":
+      return Source.mergeSpan(
+        node.args.open.sourceSpan,
+        node.args.close.sourceSpan
+      )
+    case "BinaryOp":
+      return node.op.sourceSpan
+    case "Call":
+      return Source.mergeSpan(
+        node.args.open.sourceSpan,
+        node.args.close.sourceSpan
+      )
+    case "Chain":
+      return Source.mergeSpan(node.open.sourceSpan, node.close.sourceSpan)
+    case "Construct":
+      return Source.mergeSpan(
+        node.args.open.sourceSpan,
+        node.args.close.sourceSpan
+      )
+    case "FuncDecl":
+      return node.arrow.sourceSpan
+    case "FuncDef":
+      return node.arrow.sourceSpan
+    case "Generic":
+      return node.arrow.sourceSpan
+    case "IfElse":
+      return node.if.sourceSpan
+    case "ListConstruct":
+      return Source.mergeSpan(
+        node.args.open.sourceSpan,
+        node.args.close.sourceSpan
+      )
+    case "Literal":
+      return node.value.sourceSpan
+    case "MapConstruct":
+      return Source.mergeSpan(
+        node.args.open.sourceSpan,
+        node.args.close.sourceSpan
+      )
+    case "Member":
+      return node.dot.sourceSpan
+    case "MultiParens":
+      return Source.mergeSpan(
+        node.group.open.sourceSpan,
+        node.group.close.sourceSpan
+      )
+    case "Reference":
+      return sourceSpan(node.path)
+    case "SingleParens":
+      return Source.mergeSpan(node.open.sourceSpan, node.close.sourceSpan)
+    case "TemplateString":
+      return node.sourceSpan
+    case "UnaryOp":
+      return node.op.sourceSpan
+  }
+}
 
 export function parseScripts(
   scripts: Source.Source[],
@@ -418,7 +518,7 @@ export function resolveScripts(
     if ("resolved" in s) {
       resolved[k] = s
     } else {
-      const resolver = new Resolver(globals, map, [], "Any")
+      const resolver = new Resolver(globals, map, [], "Any", false)
 
       resolved[k] = resolver.resolveScript(s)
       map[k] = resolved[k]
@@ -477,6 +577,8 @@ class Resolver {
 
   readonly context: "Any" | "Instance" | "Type"
 
+  readonly isGeneric: boolean
+
   /**
    * TODO: add global scope as context
    */
@@ -484,12 +586,14 @@ class Resolver {
     globals: Scope,
     modules: Record<string, Untyped.Script | Script>,
     callers: string[],
-    context: "Any" | "Instance" | "Type"
+    context: "Any" | "Instance" | "Type",
+    isGeneric: boolean
   ) {
     this.globals = globals
     this.modules = modules
     this.callers = callers
     this.context = context
+    this.isGeneric = isGeneric
   }
 
   resolveScript(script: Untyped.Script): Script {
@@ -890,6 +994,15 @@ class Resolver {
     const left = this.resolveInstanceExpression(untyped.left, scope)
     const right = this.resolveInstanceExpression(untyped.right, scope)
 
+    if (this.isGeneric && (isAny(left.resolved) || isAny(right.resolved))) {
+      return {
+        ...untyped,
+        left,
+        right,
+        resolved: anyTyped
+      }
+    }
+
     if (
       !isAssignableTo(left.resolved.type, right.resolved.type) ||
       !isAssignableTo(right.resolved.type, left.resolved.type)
@@ -921,6 +1034,7 @@ class Resolver {
   private resolveCall(untyped: Untyped.Call, scope: Scope): Call {
     const fn = this.resolveInstanceExpression(untyped.fn, scope)
 
+    // fn can never be AnyType
     if (fn.resolved.type._tag != "FuncType") {
       throw new CompilerError.Type(
         Untyped.sourceSpan(untyped.fn),
@@ -941,6 +1055,11 @@ class Resolver {
     }
 
     args.forEach((arg, i) => {
+      // skip the arg type check if it is of Any type if in a Generic context
+      if (this.isGeneric && isAny(arg.resolved)) {
+        return
+      }
+
       if (!isAssignableTo(arg.resolved.type, fnType.args[i])) {
         throw new CompilerError.Type(
           Untyped.sourceSpan(untyped.args.fields[i]),
@@ -988,6 +1107,7 @@ class Resolver {
 
         if (
           resolvedType !== undefined &&
+          !(this.isGeneric && isAny(resolvedRhs.resolved)) &&
           !isInstanceOf(resolvedRhs.resolved, resolvedType.resolved)
         ) {
           throw new CompilerError.Type(
@@ -1027,11 +1147,75 @@ class Resolver {
     const resolvedTypeExpr = this.resolveTypeExpression(untyped.type, scope)
     const type = resolvedTypeExpr.resolved
 
-    if (isListType(type)) {
+    if (this.isGeneric && isAnyType(type)) {
+      const values = untyped.args.fields.map((f) =>
+        this.resolveInstanceExpression(f.value, scope)
+      )
+
+      if (Untyped.isKeysConstruct(untyped)) {
+        if (
+          untyped.args.fields.every((f) =>
+            Untyped.isSingleWordReference(f.property.key)
+          )
+        ) {
+          // regular Construct with keys
+          return {
+            _tag: "Construct",
+            type: resolvedTypeExpr,
+            args: {
+              ...untyped.args,
+              fields: values.map((k, i) => {
+                const prop = untyped.args.fields[i].property
+                const key = Untyped.extractSingleWordFromReference(prop.key)
+
+                return {
+                  property: {
+                    key,
+                    colon: prop.colon
+                  },
+                  value: k
+                }
+              })
+            },
+            resolved: anyTyped
+          }
+        } else {
+          const keys = untyped.args.fields.map((f) =>
+            this.resolveInstanceExpression(f.property.key, scope)
+          )
+
+          return {
+            _tag: "MapConstruct",
+            type: resolvedTypeExpr,
+            args: {
+              ...untyped.args,
+              fields: values.map((v, i) => ({
+                key: keys[i],
+                colon: untyped.args.fields[i].property.colon,
+                value: v
+              }))
+            },
+            resolved: anyTyped
+          }
+        }
+      } else {
+        return {
+          _tag: "Construct",
+          type: resolvedTypeExpr,
+          args: {
+            ...untyped.args,
+            fields: values.map((v, i) => ({
+              value: v
+            }))
+          },
+          resolved: anyTyped
+        }
+      }
+    } else if (isListType(type)) {
       const args: InstanceExpression[] = []
 
       for (const f of untyped.args.fields) {
-        if (f.property !== undefined) {
+        if ("property" in f) {
           throw new CompilerError.Type(
             Untyped.sourceSpan(untyped),
             "Unexpected property name for list constructor"
@@ -1061,7 +1245,7 @@ class Resolver {
       }[] = []
 
       for (const field of untyped.args.fields) {
-        if (field.property === undefined) {
+        if (!("property" in field)) {
           throw new CompilerError.Type(
             Untyped.sourceSpan(field.value),
             "Missing key expression"
@@ -1095,7 +1279,7 @@ class Resolver {
       const args = untyped.args.fields.map((f) => {
         const resolvedValue = this.resolveInstanceExpression(f.value, scope)
 
-        if (f.property === undefined) {
+        if (!("property" in f)) {
           return { value: resolvedValue }
         } else {
           if (
@@ -1240,7 +1424,18 @@ class Resolver {
       )
     }
 
-    const body = this.resolveTypeExpression(untyped.body, genericScope)
+    /**
+     * The resolver treats the DataType with the empty path as an Any type, which if involved in any member access returns another typed Any etc.
+     */
+    const resolver = new Resolver(
+      this.globals,
+      this.modules,
+      this.callers,
+      this.context,
+      true
+    )
+
+    const body = resolver.resolveExpression(untyped.body, genericScope)
     const nArgs = untyped.args.fields.length
 
     return {
@@ -1255,19 +1450,44 @@ class Resolver {
             scope = addToScope(scope, untyped.args.fields[i], args[i], false)
           }
 
-          const nonGenericBody = this.resolveTypeExpression(untyped.body, scope)
+          const nonGenericBody = this.resolveExpression(untyped.body, scope)
 
-          if (nonGenericBody.resolved._tag == "DataType") {
-            return {
-              ...nonGenericBody.resolved,
-              path: {
-                ...nonGenericBody.resolved.path,
-                appliedTypes: args
+          switch (nonGenericBody.resolved._tag) {
+            case "Namespace":
+              throw new CompilerError.Type(
+                Untyped.sourceSpan(untyped.body),
+                "Unexpected generic Namespace"
+              )
+            case "GenericType":
+              throw new CompilerError.Type(
+                Untyped.sourceSpan(untyped.body),
+                "Unexpected generic generic type"
+              )
+            case "Typed":
+              if (nonGenericBody.resolved.type._tag == "DataType") {
+                return {
+                  ...nonGenericBody.resolved,
+                  type: {
+                    ...nonGenericBody.resolved.type,
+                    path: {
+                      ...nonGenericBody.resolved.type.path,
+                      appliedTypes: args
+                    }
+                  }
+                }
+              } else {
+                return nonGenericBody.resolved
               }
-            }
-          } else {
-            // TODO: should applied generic FuncType also reference the types that were applied to it?
-            return nonGenericBody.resolved
+            case "DataType":
+              return {
+                ...nonGenericBody.resolved,
+                path: {
+                  ...nonGenericBody.resolved.path,
+                  appliedTypes: args
+                }
+              }
+            case "FuncType":
+              return nonGenericBody.resolved
           }
         }
       }
@@ -1356,6 +1576,14 @@ class Resolver {
 
   private resolveMember(untyped: Untyped.Member, scope: Scope): Member {
     const object = this.resolveInstanceExpression(untyped.object, scope)
+
+    if (this.isGeneric && isAny(object.resolved)) {
+      return {
+        ...untyped,
+        object,
+        resolved: anyTyped
+      }
+    }
 
     if (object.resolved.type._tag != "DataType") {
       throw new CompilerError.Type(
@@ -1618,6 +1846,14 @@ class Resolver {
   private resolveUnaryOp(untyped: Untyped.UnaryOp, scope: Scope): UnaryOp {
     const right = this.resolveInstanceExpression(untyped.right, scope)
 
+    if (this.isGeneric && isAny(right.resolved)) {
+      return {
+        ...untyped,
+        right,
+        resolved: anyTyped
+      }
+    }
+
     if (right.resolved.type._tag != "DataType") {
       throw new CompilerError.Type(
         Untyped.sourceSpan(untyped.right),
@@ -1643,7 +1879,8 @@ class Resolver {
       this.globals,
       this.modules,
       this.callers,
-      "Instance"
+      "Instance",
+      this.isGeneric
     )
 
     const expr = resolver.resolveExpression(untyped, scope)
@@ -1655,6 +1892,14 @@ class Resolver {
           "Expected Instance, got Generic"
         )
       case "Apply":
+        if (isInstanceApply(expr)) {
+          return expr
+        } else {
+          throw new CompilerError.Type(
+            Untyped.sourceSpan(untyped),
+            "Expected Instance, got Type"
+          )
+        }
       case "FuncDecl":
         throw new CompilerError.Type(
           Untyped.sourceSpan(untyped),
@@ -1703,7 +1948,8 @@ class Resolver {
       this.globals,
       this.modules,
       this.callers,
-      "Type"
+      "Type",
+      this.isGeneric
     )
 
     const expr = resolver.resolveExpression(untyped, scope)
@@ -1715,6 +1961,14 @@ class Resolver {
           "Expected Type, got Generic"
         )
       case "Apply":
+        if (isTypeApply(expr)) {
+          return expr
+        } else {
+          throw new CompilerError.Type(
+            Untyped.sourceSpan(untyped),
+            "Expected Type, got Instance"
+          )
+        }
       case "FuncDecl":
         return expr
       case "BinaryOp":
@@ -1863,7 +2117,8 @@ class Resolver {
       this.globals,
       this.modules,
       [...this.callers, caller],
-      "Any"
+      "Any",
+      false
     )
 
     const resolvedModule = resolver.resolveScript(module)

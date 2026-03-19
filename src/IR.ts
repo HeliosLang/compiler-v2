@@ -335,6 +335,102 @@ class Parser {
   }
 }
 
+export function makeCall(fn: Expression, args: Expression[]): Expression {
+  const sourceSpan = Source.DummySpan()
+
+  return {
+    _tag: "Call",
+    fn,
+    args: {
+      _tag: "Group",
+      open: {
+        _tag: "Symbol",
+        value: "(",
+        sourceSpan
+      },
+      fields: args,
+      separators: [],
+      close: {
+        _tag: "Symbol",
+        value: ")",
+        sourceSpan
+      }
+    }
+  }
+}
+
+export function makeBuiltinCall(
+  builtinName: string,
+  args: Expression[]
+): Expression {
+  return makeCall(makeReference(builtinName), args)
+}
+
+export function makeFuncDef(
+  argNames: string[],
+  body: Expression,
+  absorbDelay: boolean
+): Expression {
+  const sourceSpan = Source.DummySpan()
+
+  return {
+    _tag: "FuncDef",
+    args: {
+      _tag: "Group",
+      open: {
+        _tag: "Symbol",
+        value: "(",
+        sourceSpan
+      },
+      fields: argNames.map((an) => ({
+        _tag: "Word",
+        value: an,
+        sourceSpan
+      })),
+      separators: [],
+      close: {
+        _tag: "Symbol",
+        value: ")",
+        sourceSpan
+      }
+    },
+    arrow: {
+      _tag: "Symbol",
+      value: "->",
+      sourceSpan
+    },
+    body: {
+      open: {
+        _tag: "Symbol",
+        value: "{",
+        sourceSpan
+      },
+      expr:
+        absorbDelay && body._tag == "FuncDef" && body.args.fields.length == 0
+          ? body.body.expr
+          : body,
+      close: {
+        _tag: "Symbol",
+        value: "}",
+        sourceSpan
+      }
+    }
+  }
+}
+
+export function makeReference(name: string): Expression {
+  const sourceSpan = Source.DummySpan()
+
+  return {
+    _tag: "Reference",
+    name: {
+      _tag: "Word",
+      value: name,
+      sourceSpan
+    }
+  }
+}
+
 class Resolver {
   readonly scope: Set<string>
 

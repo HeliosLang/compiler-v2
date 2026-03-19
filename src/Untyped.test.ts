@@ -29,10 +29,13 @@ describe("parseScript", () => {
     expect(typeExpr.args.fields.length).toBe(2)
 
     const first = typeExpr.args.fields[0]
-    expect(first.property).toBeDefined()
-    if (first.property === undefined) {
+
+    if (!("property" in first)) {
       throw new Error("expected first field property")
     }
+
+    expect(first.property).toBeDefined()
+
     expect(first.property.key._tag).toBe("Reference")
     if (first.property.key._tag !== "Reference") {
       throw new Error("expected property key to be Reference")
@@ -41,6 +44,9 @@ describe("parseScript", () => {
     expect(first.value._tag).toBe("Literal")
 
     const second = typeExpr.args.fields[1]
+    if (!("property" in second)) {
+      throw new Error("expected second field property")
+    }
     expect(second.property).toBeUndefined()
     expect(second.value._tag).toBe("Literal")
   })
