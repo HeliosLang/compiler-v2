@@ -100,6 +100,10 @@ function makeGlobals(): Applied.Globals {
   const realType = makeDataType("Real")
   const stringType = makeDataType("String")
   const unitType = makeDataType("Unit")
+  const errorUnitType = {
+    ...unitType,
+    isError: true
+  }
   const dataType = makeDataType("Data")
   const bls12_381_G1ElementType = makeDataType("Bls12_381_G1Element")
   const bls12_381_G2ElementType = makeDataType("Bls12_381_G2Element")
@@ -113,20 +117,6 @@ function makeGlobals(): Applied.Globals {
       path: {
         ...makePath("List"),
         appliedTypes: [item]
-      },
-      properties: {},
-      variants: {}
-    })
-  }
-
-  const mapGeneric: Typed.GenericValue = {
-    _tag: "GenericValue",
-    nArgs: 2,
-    type: ([key, value]) => ({
-      _tag: "DataType",
-      path: {
-        ...makePath("Map"),
-        appliedTypes: [key, value]
       },
       properties: {},
       variants: {}
@@ -240,11 +230,17 @@ function makeGlobals(): Applied.Globals {
         deps: []
       }
     },
+    error: {
+      ...makeFunc("error", [], errorUnitType),
+      implementation: {
+        ir: "() -> {error()}",
+        deps: []
+      }
+    },
     Bls12_381_G1Element: { symbolValue: bls12_381_G1ElementType },
     Bls12_381_G2Element: { symbolValue: bls12_381_G2ElementType },
     Bls12_381_MlResult: { symbolValue: bls12_381_MlResultType },
     List: { symbolValue: listGeneric },
-    Map: { symbolValue: mapGeneric },
     Pair: { symbolValue: pairGeneric },
     scriptContextData: { symbolValue: { _tag: "Typed", type: dataType} },
     addInteger: makeFunc("addInteger", [intType, intType], intType),

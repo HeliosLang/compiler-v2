@@ -30,6 +30,14 @@ export interface Typed<T extends Type = Type> {
 
 export type Type = DataType | FuncType
 
+function typeToString(t: Type): string {
+  if (t._tag == "DataType") {
+    return pathToString(t.path)
+  } else {
+    return "func"
+  }
+}
+
 export type SymbolValueWithImplementation<T extends SymbolValue = SymbolValue> =
   {
     symbolValue: T
@@ -57,6 +65,8 @@ export interface DataType {
   readonly properties: Record<string, SymbolValueWithImplementation<DataType>>
 
   readonly variants: Record<string, VariantImplementation>
+
+  readonly isError?: boolean | undefined
 }
 
 const anyType: DataType = {
@@ -125,7 +135,7 @@ function isInstanceOf(typed: Typed, type: Type) {
 
 function isAssignableTo(type: Type, target: Type): boolean {
   if (type._tag == "DataType" && target._tag == "DataType") {
-    return pathToString(type.path) == pathToString(target.path)
+    return pathToString(type.path) == pathToString(target.path) || type.isError === true || target.isError === true
   } else if (type._tag == "FuncType" && target._tag == "FuncType") {
     return (
       type.args.length == target.args.length &&
@@ -1758,7 +1768,7 @@ class Resolver {
     ) {
       throw new CompilerError.Type(
         Untyped.sourceSpan(untyped),
-        "If/else branches must return compatible types"
+        `If/else branches must return compatible types (if: ${typeToString(ifBranch.resolved.type)}, else: ${typeToString(elseBranch.resolved.type)})`
       )
     }
 
