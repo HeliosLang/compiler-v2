@@ -1030,6 +1030,7 @@ class Applier {
           case "Apply":
           case "FuncDecl":
           case "Generic":
+          case "Switch":
             throw new Error(`${pathStrForError} isn't an instance`)
           case "BinaryOp":
           case "Call":

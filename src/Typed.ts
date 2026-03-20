@@ -8,7 +8,7 @@ import * as Untyped from "./Untyped.js"
 // The entry point requires a global scope object
 
 // We must start by defining what types are
-export type SymbolValue = Namespace | Typed | Type | GenericType
+export type SymbolValue = Namespace | Typed | Type | GenericValue
 
 export function isType(value: SymbolValue) {
   return value._tag == "DataType" || value._tag == "FuncType"
@@ -108,8 +108,8 @@ export interface FuncType {
   readonly returns: Type
 }
 
-export interface GenericType {
-  readonly _tag: "GenericType"
+export interface GenericValue {
+  readonly _tag: "GenericValue"
   readonly nArgs: number
   readonly type: (args: DataType[]) => Type | Typed
 }
@@ -130,6 +130,10 @@ function isAssignableTo(type: Type, target: Type): boolean {
   } else {
     return false
   }
+}
+
+function haveCompatibleTypes(a: Type, b: Type): boolean {
+  return isAssignableTo(a, b) && isAssignableTo(b, a)
 }
 
 export interface Path extends Untyped.Path {
@@ -299,7 +303,19 @@ interface FuncDefFirstPass extends Omit<FuncDef, "body" | "resolved"> {
 
 export interface Generic extends Omit<Untyped.Generic, "body"> {
   readonly body: Expression
-  readonly resolved: GenericType
+  readonly resolved: GenericValue
+}
+
+export interface Switch extends Omit<Untyped.Switch, "group"> {
+  readonly group: Token.Group<
+    "{",
+    {
+      readonly variant: Token.Word
+      readonly arrow: Token.Symbol<"->">
+      readonly body: InstanceExpression
+    }
+  >
+  readonly resolved: GenericValue
 }
 
 export interface IfElse extends Omit<
@@ -410,6 +426,7 @@ export type Expression =
   | Reference
   | SingleParens
   | Struct
+  | Switch
   | TemplateString
   | UnaryOp
 
@@ -503,6 +520,8 @@ export function sourceSpan(node: Path | Expression): Source.Span {
       return Source.mergeSpan(node.open.sourceSpan, node.close.sourceSpan)
     case "Struct":
       return node.struct.sourceSpan
+    case "Switch":
+      return Source.mergeSpan(node.switch.sourceSpan, node.group.close.sourceSpan)
     case "TemplateString":
       return node.sourceSpan
     case "UnaryOp":
@@ -971,10 +990,7 @@ class Resolver {
       case "Struct":
         return this.resolveStruct(expr, scope)
       case "Switch":
-        throw new CompilerError.Syntax(
-          Untyped.sourceSpan(expr),
-          "switch expressions are not supported beyond parsing yet"
-        )
+        return this.resolveSwitch(expr, scope)
       case "TemplateString":
         return this.resolveTemplateString(expr, scope)
       case "UnaryOp":
@@ -985,7 +1001,7 @@ class Resolver {
   private resolveApply(untyped: Untyped.Apply, scope: Scope): Apply {
     const gtype = this.resolveExpression(untyped.gtype, scope)
 
-    if (gtype.resolved._tag != "GenericType") {
+    if (gtype.resolved._tag != "GenericValue") {
       throw new CompilerError.Type(
         Untyped.sourceSpan(untyped.gtype),
         "Expected a generic type"
@@ -1088,7 +1104,7 @@ class Resolver {
         _tag: "DataType",
         path: {
           _tag: "Path",
-          names: [untyped.enum],
+          names: [],
           separators: []
         },
         properties: {},
@@ -1549,7 +1565,7 @@ class Resolver {
       ...untyped,
       body,
       resolved: {
-        _tag: "GenericType",
+        _tag: "GenericValue",
         nArgs: untyped.args.fields.length,
         type: (args: DataType[]) => {
           // re-evaluate the body with proper types?
@@ -1565,7 +1581,7 @@ class Resolver {
                 Untyped.sourceSpan(untyped.body),
                 "Unexpected generic Namespace"
               )
-            case "GenericType":
+            case "GenericValue":
               throw new CompilerError.Type(
                 Untyped.sourceSpan(untyped.body),
                 "Unexpected generic generic type"
@@ -1601,6 +1617,106 @@ class Resolver {
     }
   }
 
+  private resolveSwitch(untyped: Untyped.Switch, scope: Scope): Switch {
+    if (untyped.group.fields.length == 0) {
+      throw new CompilerError.Type(
+        Untyped.sourceSpan(untyped),
+        "Switch must contain at least one branch"
+      )
+    }
+
+    const resolveFields = () => {
+      const explicitVariants = new Set<string>()
+      let hasElse = false
+
+      const fields = untyped.group.fields.map((field) => {
+        if (field.variant.value == "else") {
+          hasElse = true
+        } else if (explicitVariants.has(field.variant.value)) {
+          throw new CompilerError.Reference(
+            field.variant.sourceSpan,
+            `Duplicate switch variant '${field.variant.value}'`
+          )
+        } else {
+          explicitVariants.add(field.variant.value)
+        }
+
+        return {
+          ...field,
+          body: this.resolveInstanceExpression(field.body, scope)
+        }
+      })
+
+      const returnType = fields[0].body.resolved.type
+
+      for (let i = 1; i < fields.length; i++) {
+        if (!haveCompatibleTypes(returnType, fields[i].body.resolved.type)) {
+          throw new CompilerError.Type(
+            Untyped.sourceSpan(untyped.group.fields[i].body),
+            "Switch branches must return compatible types"
+          )
+        }
+      }
+
+      return {
+        explicitVariants,
+        fields,
+        hasElse,
+        returnType
+      }
+    }
+
+    const { fields } = resolveFields()
+
+    return {
+      ...untyped,
+      group: {
+        ...untyped.group,
+        fields
+      },
+      resolved: {
+        _tag: "GenericValue",
+        nArgs: 1,
+        type: ([subject]: DataType[]) => {
+          const { explicitVariants, fields, hasElse, returnType } =
+            resolveFields()
+
+          for (const field of fields) {
+            if (
+              field.variant.value != "else" &&
+              !(field.variant.value in subject.variants)
+            ) {
+              throw new CompilerError.Reference(
+                field.variant.sourceSpan,
+                `Unknown variant '${field.variant.value}'`
+              )
+            }
+          }
+
+          if (!hasElse) {
+            for (const variant of Object.keys(subject.variants)) {
+              if (!explicitVariants.has(variant)) {
+                throw new CompilerError.Type(
+                  Untyped.sourceSpan(untyped),
+                  `Switch must handle variant '${variant}' or include else`
+                )
+              }
+            }
+          }
+
+          return {
+            _tag: "Typed",
+            type: {
+              _tag: "FuncType",
+              args: [subject],
+              returns: returnType
+            }
+          }
+        }
+      }
+    }
+  }
+
   private resolveIfElse(untyped: Untyped.IfElse, scope: Scope): IfElse {
     const condition = this.resolveInstanceExpression(untyped.condition, scope)
 
@@ -1617,10 +1733,7 @@ class Resolver {
         ? this.resolveIfElse(untyped.elseBranch, scope)
         : this.resolveChain(untyped.elseBranch, scope)
 
-    if (
-      !isAssignableTo(ifBranch.resolved.type, elseBranch.resolved.type) ||
-      !isAssignableTo(elseBranch.resolved.type, ifBranch.resolved.type)
-    ) {
+    if (!haveCompatibleTypes(ifBranch.resolved.type, elseBranch.resolved.type)) {
       throw new CompilerError.Type(
         Untyped.sourceSpan(untyped),
         "If/else branches must return compatible types"
@@ -2102,6 +2215,11 @@ class Resolver {
           Untyped.sourceSpan(untyped),
           "Expected Instance, got Type"
         )
+      case "Switch":
+        throw new CompilerError.Type(
+          Untyped.sourceSpan(untyped),
+          "Expected Instance, got Generic"
+        )
     }
   }
 
@@ -2174,6 +2292,11 @@ class Resolver {
       case "Enum":
       case "Struct":
         return expr
+      case "Switch":
+        throw new CompilerError.Type(
+          Untyped.sourceSpan(untyped),
+          "Expected Type, got Generic"
+        )
     }
   }
 

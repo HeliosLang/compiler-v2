@@ -769,6 +769,11 @@ class Parser {
       return this.parseStruct(structWord, r)
     }
 
+    const enumWord = r.matches(word("enum"))
+    if (enumWord !== undefined) {
+      return this.parseEnum(enumWord, r)
+    }
+
     const switchWord = r.matches(word("switch"))
     if (switchWord !== undefined) {
       return this.parseSwitch(switchWord, r)
@@ -845,6 +850,104 @@ class Parser {
         }
       }),
       close: fieldsGroup.close
+    }
+  }
+
+  private parseEnum(enumWord: Token.Word<"enum">, r: Reader): Enum {
+    const variantsGroup = r.matches(group("{"))
+
+    if (variantsGroup === undefined) {
+      throw r.syntaxError(`Expected '{' after 'enum'`)
+    }
+
+    const variants: Enum["variants"] = []
+
+    for (const field of variantsGroup.fields) {
+      const body = field.insertSemicolons([":"])
+
+      while (!body.isEof()) {
+        const part = body.readUntil(symbol(";"))
+
+        if (part.rest.length > 0) {
+          variants.push(this.parseEnumVariant(part))
+        }
+
+        if (!body.matches(symbol(";"))) {
+          break
+        }
+      }
+    }
+
+    return {
+      _tag: "Enum",
+      enum: enumWord,
+      open: variantsGroup.open,
+      variants,
+      close: variantsGroup.close
+    }
+  }
+
+  private parseEnumVariant(r: Reader): Enum["variants"][number] {
+    const m = r.matches(int(), symbol(":"))
+
+    const index =
+      m === undefined
+        ? undefined
+        : {
+            value: m[0],
+            colon: m[1]
+          }
+
+    const name = this.parseNonKeyword(r)
+    const fieldsGroup = r.matches(group("{"))
+
+    let fields: Enum["variants"][number]["fields"] = []
+    let open: Token.Symbol<"{">
+    let close: Token.Symbol<"}">
+
+    if (fieldsGroup !== undefined) {
+      fields = fieldsGroup.fields.map((field) => {
+        const m = field.matches(anyName, symbol(":"))
+
+        if (m === undefined) {
+          throw field.syntaxError(`Expected '<name>: <type>'`)
+        }
+
+        const type = {
+          colon: m[1],
+          type: this.parseExpression(field)
+        }
+
+        field.end()
+
+        return {
+          name: m[0],
+          type
+        }
+      })
+      open = fieldsGroup.open
+      close = fieldsGroup.close
+    } else {
+      open = {
+        _tag: "Symbol",
+        value: "{",
+        sourceSpan: name.sourceSpan
+      }
+      close = {
+        _tag: "Symbol",
+        value: "}",
+        sourceSpan: name.sourceSpan
+      }
+    }
+
+    r.end()
+
+    return {
+      ...(index === undefined ? {} : { index }),
+      name,
+      open,
+      fields,
+      close
     }
   }
 

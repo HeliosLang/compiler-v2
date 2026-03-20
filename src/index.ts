@@ -105,8 +105,8 @@ function makeGlobals(): Applied.Globals {
   const bls12_381_G2ElementType = makeDataType("Bls12_381_G2Element")
   const bls12_381_MlResultType = makeDataType("Bls12_381_MlResult")
 
-  const listGeneric: Typed.GenericType = {
-    _tag: "GenericType",
+  const listGeneric: Typed.GenericValue = {
+    _tag: "GenericValue",
     nArgs: 1,
     type: ([item]) => ({
       _tag: "DataType",
@@ -119,8 +119,8 @@ function makeGlobals(): Applied.Globals {
     })
   }
 
-  const mapGeneric: Typed.GenericType = {
-    _tag: "GenericType",
+  const mapGeneric: Typed.GenericValue = {
+    _tag: "GenericValue",
     nArgs: 2,
     type: ([key, value]) => ({
       _tag: "DataType",
@@ -133,8 +133,8 @@ function makeGlobals(): Applied.Globals {
     })
   }
 
-  const pairGeneric: Typed.GenericType = {
-    _tag: "GenericType",
+  const pairGeneric: Typed.GenericValue = {
+    _tag: "GenericValue",
     nArgs: 2,
     type: ([first, second]) => ({
       _tag: "DataType",

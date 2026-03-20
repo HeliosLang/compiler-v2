@@ -4,7 +4,7 @@ import {
   parseScripts,
   pathToString,
   type DataType,
-  type GenericType,
+  type GenericValue,
   type Scope,
   type Path
 } from "./Typed.js"
@@ -31,14 +31,14 @@ const dataType = (path: string, appliedTypes?: DataType[]): DataType => ({
   variants: {}
 })
 
-const listGeneric: GenericType = {
-  _tag: "GenericType",
+const listGeneric: GenericValue = {
+  _tag: "GenericValue",
   nArgs: 1,
   type: ([item]) => dataType("List", [item])
 }
 
-const mapGeneric: GenericType = {
-  _tag: "GenericType",
+const mapGeneric: GenericValue = {
+  _tag: "GenericValue",
   nArgs: 2,
   type: ([key, value]) => dataType("Map", [key, value])
 }
@@ -53,7 +53,7 @@ const builtins: Scope = {
   Map: mapGeneric
 }
 
-describe("parseScripts", () => {
+describe("Typed.parseScripts", () => {
   it("resolves exported top-level values into the script namespace", () => {
     const scripts = parseScripts(
       [source("basic.hl", `module basic; export one = 1; export ok = true`)],
@@ -170,5 +170,50 @@ describe("parseScripts", () => {
     }
 
     expect(pathToString(flagList.path)).toBe("List[Bool]")
+  })
+
+  it("resolves switch applications to typed functions", () => {
+    const scripts = parseScripts(
+      [
+        source(
+          "switch.hl",
+          `module switchy; Choice = enum {Ok; Err}; export choose = switch {Ok -> 1, Err -> 0}[Choice]`
+        )
+      ],
+      builtins
+    )
+
+    const switchy = scripts["switchy"]
+    if (switchy === undefined) {
+      throw new Error("expected script 'switchy'")
+    }
+
+    const choose = switchy.resolved.members["choose"]
+    if (choose?._tag !== "Typed" || choose.type._tag !== "FuncType") {
+      throw new Error("expected 'choose' to be a Typed FuncType")
+    }
+
+    const [argType] = choose.type.args
+    if (argType?._tag !== "DataType" || choose.type.returns._tag !== "DataType") {
+      throw new Error("expected switch function signature to use DataTypes")
+    }
+
+    expect(choose.type.args).toHaveLength(1)
+    expect(pathToString(argType.path)).toBe("switchy::Choice")
+    expect(pathToString(choose.type.returns.path)).toBe("Int")
+  })
+
+  it("throws when switch branches return incompatible types", () => {
+    expect(() =>
+      parseScripts(
+        [
+          source(
+            "switch-mismatch.hl",
+            `module switchMismatch; export choose = switch {Ok -> 1, Err -> true}`
+          )
+        ],
+        builtins
+      )
+    ).toThrow(/Switch branches must return compatible types/)
   })
 })

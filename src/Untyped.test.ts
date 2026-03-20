@@ -6,7 +6,7 @@ const source = (content: string) => ({
   content
 })
 
-describe("parseScript", () => {
+describe("Untyped.parseScript", () => {
   it("parses a construct expression in a declaration type", () => {
     const ast = parseScript(source(`module sample value: Foo{a: 1, 2}`))
 
@@ -173,6 +173,27 @@ describe("parseScript", () => {
     expect(expr.fields[0]?.type.type._tag).toBe("Reference")
     expect(expr.fields[0]?.key).toBeUndefined()
     expect(expr.fields[1]?.key?.value).toBe("flag")
+  })
+
+  it("parses enum variants separated by semicolons", () => {
+    const ast = parseScript(source(`module sample Choice = enum {Ok; Err}`))
+
+    const stmt = ast.statements[0]
+    expect(stmt?._tag).toBe("Assign")
+    if (stmt?._tag !== "Assign") {
+      throw new Error("expected Assign statement")
+    }
+
+    const expr = stmt.rhs
+    expect(expr._tag).toBe("Enum")
+    if (expr._tag !== "Enum") {
+      throw new Error("expected Enum expression")
+    }
+
+    expect(expr.variants.map((variant) => variant.name.value)).toEqual([
+      "Ok",
+      "Err"
+    ])
   })
 
   it("parses switch expressions", () => {
