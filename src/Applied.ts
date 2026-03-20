@@ -1819,6 +1819,7 @@ class CodeGenerator {
       _tag: "Call",
       fn: {
         _tag: "Reference",
+        isCalled: true,
         name: {
           _tag: "Word",
           value: "constr",
@@ -1854,15 +1855,16 @@ class CodeGenerator {
   }
 
   reference(expr: Reference): IR.Reference {
-    const last = expr.path.names.at(-1)
+    const path = expr.resolved.path ?? expr.path
+    const last = path.names.at(-1)
     const sourceSpan =
-      expr.path.names.length == 1 && last ? last.sourceSpan : Source.DummySpan()
+      path.names.length == 1 && last ? last.sourceSpan : Source.DummySpan()
 
     return {
       _tag: "Reference",
       name: {
         _tag: "Word",
-        value: pathToString(expr.path),
+        value: pathToString(path),
         sourceSpan
       }
     }

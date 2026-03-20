@@ -853,7 +853,7 @@ class Resolver {
           }
         }
 
-        addToScope(scope, untyped.name, symbolValue)
+        scope = addToScope(scope, untyped.name, symbolValue)
       }
 
       resolvedAssign = {
@@ -928,7 +928,13 @@ class Resolver {
           }
         }
 
-        scope = addToScope(scope, firstPass.name, symbolValue, false)
+        scope =
+          firstPass.rhs.resolved !== undefined
+            ? {
+                ...scope,
+                [firstPass.name.value]: symbolValue
+              }
+            : addToScope(scope, firstPass.name, symbolValue, false)
       }
 
       return {
@@ -1200,7 +1206,7 @@ class Resolver {
       if (!isAssignableTo(arg.resolved.type, fnType.args[i])) {
         throw new CompilerError.Type(
           Untyped.sourceSpan(untyped.args.fields[i]),
-          "Argument type mismatch"
+          `Argument type mismatch (arg ${i} of ${fn.resolved.path ? pathToString(fn.resolved.path) : "<anon>"}, expected ${fnType.args[i]._tag == "DataType" ? pathToString(fnType.args[i].path) : "func"}, got ${arg.resolved.type._tag == "DataType" ? pathToString(arg.resolved.type.path) : "func"})`
         )
       }
     })
@@ -2222,7 +2228,7 @@ class Resolver {
         } else {
           throw new CompilerError.Type(
             Untyped.sourceSpan(untyped),
-            "Expected Instance, got Type"
+            `Expected Instance, got Type (${pathToString(expr.path)})`
           )
         }
       case "Enum":

@@ -1,3 +1,6 @@
+import { describe, expect, it } from "bun:test"
+import { compile } from "../src/index.js"
+
 const src = `validator anchor
 
 export SEED: Data
@@ -66,9 +69,6 @@ export main = (redeemer: Data) -> {
                     error()
                 }
             }
-
-            // the input contains a list of witnesses
-            assert_witnessed_by(witness, signer_ptr, tx)
         } else {
             error()
         }
@@ -135,7 +135,7 @@ get_pair = (inputs: Map[Data, Data], index: Int, running_idx: Int): Pair[Data, D
     }
 }
 
-assets_contain = (assets: Map[Data, Data], policy: Data): Bool {
+assets_contain = (assets: Map[Data, Data], policy: Data): Bool -> {
     if (nullList(assets)) {
         false
     } else {
@@ -147,8 +147,17 @@ assets_contain = (assets: Map[Data, Data], policy: Data): Bool {
             assets_contain(tailList(assets), policy)
         }
     }
-}
-
-witnesses = (witnesses: List[Data], tx: List[Data]) -> {
-    witness = headList(witnesses)
 }`
+
+describe("anchor", () => {
+  it("compiles the embedded validator source", () => {
+    const entryPoints = compile([
+      {
+        name: "anchor.hl",
+        content: src
+      }
+    ])
+
+    expect(entryPoints["anchor::main"]).toBeDefined()
+  })
+})

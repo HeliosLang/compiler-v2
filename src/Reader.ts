@@ -192,8 +192,15 @@ export class Reader {
   }
 
   syntaxError(reason: string) {
+    let i = this.pos
+    let t = this.tokens[i]
+    while (t === undefined) {
+      i--
+      t = this.tokens[i]
+    }
+    
     return new CompilerError.Syntax(
-      Token.sourceSpan(this.tokens[this.pos]),
+      Token.sourceSpan(t),
       reason
     )
   }

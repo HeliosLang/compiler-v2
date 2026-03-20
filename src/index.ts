@@ -147,6 +147,34 @@ function makeGlobals(): Applied.Globals {
     })
   }
 
+  const fstPairGeneric: Typed.GenericValue = {
+    _tag: "GenericValue",
+    nArgs: 2,
+    type: ([first, second]) => ({
+      _tag: "Typed",
+      path: makePath("fstPair"),
+      type: {
+        _tag: "FuncType",
+        args: [pairOf(first, second)],
+        returns: first
+      }
+    })
+  }
+
+  const sndPairGeneric: Typed.GenericValue = {
+    _tag: "GenericValue",
+    nArgs: 2,
+    type: ([first, second]) => ({
+      _tag: "Typed",
+      path: makePath("sndPair"),
+      type: {
+        _tag: "FuncType",
+        args: [pairOf(first, second)],
+        returns: second
+      }
+    })
+  }
+
   const listOf = (item: Typed.DataType): Typed.DataType =>
     listGeneric.type([item]) as Typed.DataType
 
@@ -218,6 +246,7 @@ function makeGlobals(): Applied.Globals {
     List: { symbolValue: listGeneric },
     Map: { symbolValue: mapGeneric },
     Pair: { symbolValue: pairGeneric },
+    scriptContextData: { symbolValue: { _tag: "Typed", type: dataType} },
     addInteger: makeFunc("addInteger", [intType, intType], intType),
     subtractInteger: makeFunc("subtractInteger", [intType, intType], intType),
     multiplyInteger: makeFunc("multiplyInteger", [intType, intType], intType),
@@ -295,8 +324,8 @@ function makeGlobals(): Applied.Globals {
     ),
     chooseUnit: makeFunc("chooseUnit", [unitType, dataType], dataType),
     trace: makeFunc("trace", [stringType, dataType], dataType),
-    fstPair: makeFunc("fstPair", [dataPairType], dataType),
-    sndPair: makeFunc("sndPair", [dataPairType], dataType),
+    fstPair: { symbolValue: fstPairGeneric },
+    sndPair: { symbolValue: sndPairGeneric },
     chooseList: makeFunc(
       "chooseList",
       [dataListType, dataType, dataType],

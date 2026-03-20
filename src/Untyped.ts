@@ -997,9 +997,18 @@ class Parser {
   }
 
   private parseIfElse(ifWord: Token.Word<"if">, r: Reader): IfElse {
-    const condition = this.parseExpression(r)
+    const conditionReader = r.readUntil(group("{"))
+    const condition = this.parseExpression(conditionReader)
 
-    const trueBranch = this.parseChain(r)
+    conditionReader.end()
+
+    const trueBranchGroup = r.matches(group("{"))
+
+    if (trueBranchGroup === undefined) {
+      throw r.syntaxError(`Expected '{' chain`)
+    }
+
+    const trueBranch = this.parseChainFromGroup(trueBranchGroup)
 
     const elseWord = r.matches(word("else"))
 
@@ -1119,7 +1128,7 @@ class Parser {
     r.end()
 
     if (expr?._tag != "Call") {
-      throw r.syntaxError(`Expected assignment or call statement`)
+      throw r.syntaxError(`Expected assignment or call statement (got ${expr._tag})`)
     }
 
     return expr
@@ -1184,7 +1193,7 @@ class Parser {
     const m = r.findNext(symbol("->"))
 
     if (m === undefined) {
-      throw r.syntaxError("Expected '->' after '(...):' ")
+      throw new CompilerError.Syntax(colon.sourceSpan, "Expected '->' after '(...):' ")
     }
 
     const arrow = m[1]
