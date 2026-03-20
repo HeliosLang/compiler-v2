@@ -462,7 +462,10 @@ export function sourceSpan(node: Path | Expression): Source.Span {
     case "Struct":
       return node.struct.sourceSpan
     case "Switch":
-      return Source.mergeSpan(node.switch.sourceSpan, node.group.close.sourceSpan)
+      return Source.mergeSpan(
+        node.switch.sourceSpan,
+        node.group.close.sourceSpan
+      )
     case "TemplateString":
       return node.sourceSpan
     case "UnaryOp":
@@ -973,10 +976,7 @@ class Parser {
             throw field.syntaxError(`Expected '<Variant> -> <expression>'`)
           }
 
-          if (
-            m[0].value == "else" &&
-            i < casesGroup.fields.length - 1
-          ) {
+          if (m[0].value == "else" && i < casesGroup.fields.length - 1) {
             throw new CompilerError.Syntax(
               m[0].sourceSpan,
               "'else' variant must come last"

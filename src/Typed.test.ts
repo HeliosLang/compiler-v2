@@ -194,7 +194,10 @@ describe("Typed.parseScripts", () => {
     }
 
     const [argType] = choose.type.args
-    if (argType?._tag !== "DataType" || choose.type.returns._tag !== "DataType") {
+    if (
+      argType?._tag !== "DataType" ||
+      choose.type.returns._tag !== "DataType"
+    ) {
       throw new Error("expected switch function signature to use DataTypes")
     }
 

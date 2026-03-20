@@ -952,7 +952,7 @@ class Applier {
         } else {
           return {
             _tag: "Raw",
-            ir: `(self) -> {sndPair(unConstrData(self))}`,
+            ir: "unConstrData",
             dependencies: [],
             resolved: {
               _tag: "Typed",

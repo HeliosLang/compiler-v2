@@ -36,6 +36,11 @@ export type SymbolValueWithImplementation<T extends SymbolValue = SymbolValue> =
     implementation?: { ir: string; deps: Path[] }
   }
 
+type VariantImplementation = {
+  symbolValue: DataType
+  is: { ir: string; deps: Path[] }
+}
+
 export interface DataType {
   readonly _tag: "DataType"
 
@@ -51,7 +56,7 @@ export interface DataType {
    */
   readonly properties: Record<string, SymbolValueWithImplementation<DataType>>
 
-  readonly variants: Record<string, DataType>
+  readonly variants: Record<string, VariantImplementation>
 }
 
 const anyType: DataType = {
@@ -521,7 +526,10 @@ export function sourceSpan(node: Path | Expression): Source.Span {
     case "Struct":
       return node.struct.sourceSpan
     case "Switch":
-      return Source.mergeSpan(node.switch.sourceSpan, node.group.close.sourceSpan)
+      return Source.mergeSpan(
+        node.switch.sourceSpan,
+        node.group.close.sourceSpan
+      )
     case "TemplateString":
       return node.sourceSpan
     case "UnaryOp":
@@ -1045,7 +1053,7 @@ class Resolver {
 
   private resolveEnum(untyped: Untyped.Enum, scope: Scope): Enum {
     const variants = Object.fromEntries(
-      untyped.variants.map((variant) => {
+      untyped.variants.map((variant, i) => {
         const properties: Record<
           string,
           SymbolValueWithImplementation<DataType>
@@ -1085,15 +1093,21 @@ class Resolver {
         return [
           variant.name.value,
           {
-            _tag: "DataType",
-            path: {
-              _tag: "Path",
-              names: [variant.name],
-              separators: []
-            },
-            properties,
-            variants: {}
-          } satisfies DataType
+            symbolValue: {
+              _tag: "DataType",
+              path: {
+                _tag: "Path",
+                names: [variant.name],
+                separators: []
+              },
+              properties,
+              variants: {}
+            } satisfies DataType,
+            is: {
+              ir: `(self) -> {equalsInteger(fstPair(self), ${i})}`,
+              deps: []
+            }
+          }
         ]
       })
     )
@@ -1733,7 +1747,9 @@ class Resolver {
         ? this.resolveIfElse(untyped.elseBranch, scope)
         : this.resolveChain(untyped.elseBranch, scope)
 
-    if (!haveCompatibleTypes(ifBranch.resolved.type, elseBranch.resolved.type)) {
+    if (
+      !haveCompatibleTypes(ifBranch.resolved.type, elseBranch.resolved.type)
+    ) {
       throw new CompilerError.Type(
         Untyped.sourceSpan(untyped),
         "If/else branches must return compatible types"
