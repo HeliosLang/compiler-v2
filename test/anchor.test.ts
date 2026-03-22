@@ -7,13 +7,13 @@ export SEED: Data
 
 export main = (redeemer: Data) -> {
     ctx = sndPair[Int,List[Data]](unConstrData(scriptContextData))
-    tx = sndPair[Int,List[Data]](unConstrData(headList(ctx)))
+    tx = sndPair[Int,List[Data]](unConstrData(headList[Data](ctx)))
 
     redeemer_pair = unConstrData(redeemer)
     redeemer_tag = fstPair[Int,List[Data]](redeemer_pair)
 
     if (equalsInteger(redeemer_tag, 0)) {
-        if (spends_seed(unListData(headList(tx)))) {
+        if (spends_seed(unListData(headList[Data](tx)))) {
             ()
         } else {
             error()
@@ -21,31 +21,31 @@ export main = (redeemer: Data) -> {
     } else {
         // index of the state input/ref-input
         ptr_fields = sndPair[Int,List[Data]](redeemer_pair)
-        input_ptr = unIData(headList(ptr_fields))
-        witness_ptr = unIData(headList(tailList(ptr_fields)))
-        signer_ptr = unIData(headList(tailList(tailList(ptr_fields))))
+        input_ptr = unIData(headList[Data](ptr_fields))
+        witness_ptr = unIData(headList[Data](tailList[Data](ptr_fields)))
+        signer_ptr = unIData(headList[Data](tailList[Data](tailList(ptr_fields))))
 
         own_hash = get_own_hash(
-            headList(tailList(tailList(ctx))),
+            headList[Data](tailList[Data](tailList[Data](ctx))),
             tx
         )
 
         inputs = unListData(
             if (equalsInteger(redeemer_tag, 1)) {
-                headList(tx)
+                headList[Data](tx)
             } else {
-                headList(tailList(tx))
+                headList[Data](tailList[Data](tx))
             }
         )
 
         input = sndPair[Int,List[Data]](unConstrData(get(inputs, input_ptr, 0)))
-        input_output = sndPair[Int,List[Data]](unConstrData(headList(tailList(input))))
-        input_assets = unMapData(headList(tailList(input_output)))
+        input_output = sndPair[Int,List[Data]](unConstrData(headList[Data](tailList[Data](input))))
+        input_assets = unMapData(headList[Data](tailList[Data](input_output)))
 
         // make sure the input contains at least one state asset
         if (assets_contain(input_assets, own_hash)) {
             // now get the datum
-            input_datum = unListData(headList(sndPair[Int,List[Data]](unConstrData(headList(tailList(tailList(input_output)))))))
+            input_datum = unListData(headList(sndPair[Int,List[Data]](unConstrData(headList[Data](tailList(tailList(input_output)))))))
 
             witness = unConstrData(get(input_datum, witness_ptr, 0))
             witness_tag = fstPair[Int,List[Data]](witness)
@@ -168,7 +168,9 @@ describe("anchor", () => {
         name: "anchor.hl",
         content: src
       }
-    ])
+    ], {
+      positionalParams: ["anchor::SEED"]
+    })
 
     expect(entryPoints["anchor::main"]).toBeDefined()
   })

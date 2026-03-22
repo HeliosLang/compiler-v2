@@ -7,6 +7,7 @@ import * as Source from "./Source.js"
 
 export type CompileOptions = {
   compileFunctions?: boolean | undefined
+  positionalParams?: readonly string[] | undefined
 }
 
 export const compile = (
@@ -25,7 +26,8 @@ export const compile = (
   const typedScripts = Typed.resolveScripts(untypedScripts, globalScope)
   const entryPoints = Applied.buildEntryPoints(typedScripts, {
     builtins: globalImpls,
-    compileFunctions: options.compileFunctions
+    compileFunctions: options.compileFunctions,
+    positionalParams: options.positionalParams
   })
 
   const scripts: Record<string, Uplc.Script> = {}
@@ -161,6 +163,75 @@ function makeGlobals(): Applied.Globals {
         _tag: "FuncType",
         args: [pairOf(first, second)],
         returns: second
+      }
+    })
+  }
+
+  const headListGeneric: Typed.GenericValue = {
+    _tag: "GenericValue",
+    nArgs: 1,
+    inferCall: ([list]) => {
+      const item = list.path.appliedTypes?.[0]
+
+      if (item === undefined) {
+        throw new Error("headList() expects a list argument")
+      }
+
+      return [item]
+    },
+    type: ([item]) => ({
+      _tag: "Typed",
+      path: makePath("headList"),
+      type: {
+        _tag: "FuncType",
+        args: [listOf(item)],
+        returns: item
+      }
+    })
+  }
+
+  const tailListGeneric: Typed.GenericValue = {
+    _tag: "GenericValue",
+    nArgs: 1,
+    inferCall: ([list]) => {
+      const item = list.path.appliedTypes?.[0]
+
+      if (item === undefined) {
+        throw new Error("tailList() expects a list argument")
+      }
+
+      return [item]
+    },
+    type: ([item]) => ({
+      _tag: "Typed",
+      path: makePath("tailList"),
+      type: {
+        _tag: "FuncType",
+        args: [listOf(item)],
+        returns: listOf(item)
+      }
+    })
+  }
+
+  const nullListGeneric: Typed.GenericValue = {
+    _tag: "GenericValue",
+    nArgs: 1,
+    inferCall: ([list]) => {
+      const item = list.path.appliedTypes?.[0]
+
+      if (item === undefined) {
+        throw new Error("nullList() expects a list argument")
+      }
+
+      return [item]
+    },
+    type: ([item]) => ({
+      _tag: "Typed",
+      path: makePath("nullList"),
+      type: {
+        _tag: "FuncType",
+        args: [listOf(item)],
+        returns: boolType
       }
     })
   }
@@ -328,9 +399,9 @@ function makeGlobals(): Applied.Globals {
       dataType
     ),
     mkCons: makeFunc("mkCons", [dataType, dataListType], dataListType),
-    headList: makeFunc("headList", [dataListType], dataType),
-    tailList: makeFunc("tailList", [dataListType], dataListType),
-    nullList: makeFunc("nullList", [dataListType], boolType),
+    headList: { symbolValue: headListGeneric },
+    tailList: { symbolValue: tailListGeneric },
+    nullList: { symbolValue: nullListGeneric },
     chooseData: makeFunc(
       "chooseData",
       [dataType, dataType, dataType, dataType, dataType, dataType],

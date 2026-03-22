@@ -127,6 +127,7 @@ export interface GenericValue {
   readonly _tag: "GenericValue"
   readonly nArgs: number
   readonly type: (args: DataType[]) => Type | Typed
+  readonly inferCall?: ((fnArgs: DataType[]) => DataType[]) | undefined
 }
 
 function isInstanceOf(typed: Typed, type: Type) {
@@ -770,10 +771,12 @@ class Resolver {
     scriptPath: Untyped.Path
   ): { scope: Scope; statement: Declare } {
     const resolvedType = this.resolveTypeGuard(untyped.type, scope)
+    const symbolPath = Untyped.extendPath(scriptPath, untyped.name)
 
     const value: SymbolValue = {
       _tag: "Typed",
-      type: resolvedType.resolved
+      type: resolvedType.resolved,
+      path: symbolPath
     }
 
     scope = addToScope(scope, untyped.name, value, false)
@@ -783,7 +786,7 @@ class Resolver {
       statement: {
         ...untyped,
         type: resolvedType,
-        path: Untyped.extendPath(scriptPath, untyped.name)
+        path: symbolPath
       } satisfies Declare
     }
   }
@@ -1067,6 +1070,39 @@ class Resolver {
     }
   }
 
+  private makeSyntheticTypeExpression(type: DataType): TypeExpression {
+    return {
+      _tag: "Reference",
+      path: { ...type.path },
+      resolved: type
+    }
+  }
+
+  private makeSyntheticTypeArgGroup(
+    args: DataType[],
+    sourceSpan: Source.Span
+  ): Token.Group<"[", TypeExpression> {
+    return {
+      _tag: "Group",
+      open: {
+        _tag: "Symbol",
+        value: "[",
+        sourceSpan
+      },
+      fields: args.map((arg) => this.makeSyntheticTypeExpression(arg)),
+      separators: args.slice(1).map(() => ({
+        _tag: "Symbol",
+        value: ",",
+        sourceSpan
+      })),
+      close: {
+        _tag: "Symbol",
+        value: "]",
+        sourceSpan
+      }
+    }
+  }
+
   private resolveEnum(untyped: Untyped.Enum, scope: Scope): Enum {
     const variants = Object.fromEntries(
       untyped.variants.map((variant, i) => {
@@ -1185,7 +1221,58 @@ class Resolver {
   }
 
   private resolveCall(untyped: Untyped.Call, scope: Scope): Call {
-    const fn = this.resolveInstanceExpression(untyped.fn, scope)
+    const resolvedFn = this.resolveExpression(untyped.fn, scope)
+    const args = untyped.args.fields.map((arg) =>
+      this.resolveInstanceExpression(arg, scope)
+    )
+    let fn: InstanceExpression
+
+    if (resolvedFn.resolved._tag == "GenericValue") {
+      if (resolvedFn.resolved.inferCall === undefined) {
+        throw new CompilerError.Type(
+          Untyped.sourceSpan(untyped.fn),
+          "Generic function requires explicit type arguments"
+        )
+      }
+
+      const fnArgTypes = args.map((arg, i) => {
+        if (arg.resolved.type._tag != "DataType") {
+          throw new CompilerError.Type(
+            Untyped.sourceSpan(untyped.args.fields[i]),
+            "Can only infer type arguments from data-typed call arguments"
+          )
+        }
+
+        return arg.resolved.type
+      })
+
+      const inferredTypeArgs = resolvedFn.resolved.inferCall(fnArgTypes)
+
+      if (inferredTypeArgs.length != resolvedFn.resolved.nArgs) {
+        throw new Error("inferCall() returned an unexpected number of types")
+      }
+
+      const inferredFn: Apply = {
+        _tag: "Apply",
+        gtype: resolvedFn,
+        args: this.makeSyntheticTypeArgGroup(
+          inferredTypeArgs,
+          Untyped.sourceSpan(untyped.fn)
+        ),
+        resolved: resolvedFn.resolved.type(inferredTypeArgs)
+      }
+
+      if (!isInstanceApply(inferredFn)) {
+        throw new CompilerError.Type(
+          Untyped.sourceSpan(untyped.fn),
+          "Expected generic call to resolve to a function"
+        )
+      }
+
+      fn = inferredFn
+    } else {
+      fn = this.resolveInstanceExpression(untyped.fn, scope)
+    }
 
     // fn can never be AnyType
     if (fn.resolved.type._tag != "FuncType") {
@@ -1195,10 +1282,6 @@ class Resolver {
       )
     }
     const fnType = fn.resolved.type
-
-    const args = untyped.args.fields.map((arg) =>
-      this.resolveInstanceExpression(arg, scope)
-    )
 
     if (args.length != fnType.args.length) {
       throw new CompilerError.Type(

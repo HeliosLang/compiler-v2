@@ -549,8 +549,26 @@ class Applier {
     dependencies: Path[]
   } {
     switch (expr._tag) {
-      case "Apply":
-        throw new Error("not yet implemented")
+      case "Apply": {
+        const path =
+          expr.resolved.path ??
+          (expr.gtype._tag == "Reference"
+            ? ({ ...expr.gtype.path } as Path)
+            : undefined)
+
+        if (path === undefined) {
+          throw new Error("unable to lower anonymous instance apply")
+        }
+
+        return {
+          applied: {
+            _tag: "Reference",
+            path,
+            resolved: expr.resolved
+          },
+          dependencies: path.names.length < 2 ? [] : [path]
+        }
+      }
       case "BinaryOp": {
         const left = this.applyExpression(expr.left)
         const right = this.applyExpression(expr.right)

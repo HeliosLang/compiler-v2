@@ -89,4 +89,24 @@ export main = (): Int -> {
 
     expect(script.version).toBe(3)
   })
+
+  it("infers type arguments for headList() and tailList()", () => {
+    const script = compileEntryPoint(
+      "list_infer.hl",
+      `module list_infer;
+export main = (): Int -> {
+  items = mkCons(iData(1), mkCons(iData(2), mkNilData(())))
+  first = headList(items)
+  rest = tailList(items)
+
+  if (nullList[Data](rest)) {
+    unIData(headList(rest))
+  } else {
+    unIData(first)
+  }
+}`
+    )
+
+    expect(script.version).toBe(3)
+  })
 })
