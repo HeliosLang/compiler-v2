@@ -282,7 +282,10 @@ export function pretty(expr: Expression, options: PrettyOptions = {}): string {
       const chain = assignmentChain(expr)
 
       if (chain === undefined) {
-        return indentFirstLine(format(expr, depth + 1, nextIndent.length), nextIndent)
+        return indentFirstLine(
+          format(expr, depth + 1, nextIndent.length),
+          nextIndent
+        )
       }
 
       return [
@@ -293,10 +296,7 @@ export function pretty(expr: Expression, options: PrettyOptions = {}): string {
             0,
             nextIndent.length + prefix.length
           )
-          return indentLines(
-            `${assignment.name} = ${value}`,
-            nextIndent
-          )
+          return indentLines(`${assignment.name} = ${value}`, nextIndent)
         }),
         indentLines(format(chain.result, 0, nextIndent.length), nextIndent)
       ].join(newline)
@@ -316,15 +316,9 @@ export function pretty(expr: Expression, options: PrettyOptions = {}): string {
                 0,
                 nextIndent.length + prefix.length
               )
-              return indentLines(
-                `${assignment.name} = ${value}`,
-                nextIndent
-              )
+              return indentLines(`${assignment.name} = ${value}`, nextIndent)
             }),
-            indentLines(
-              format(chain.result, 0, nextIndent.length),
-              nextIndent
-            ),
+            indentLines(format(chain.result, 0, nextIndent.length), nextIndent),
             `${indent}}`
           ].join(newline)
         }

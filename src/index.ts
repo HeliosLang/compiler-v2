@@ -331,7 +331,7 @@ function makeGlobals(): Applied.Globals {
     Bls12_381_MlResult: { symbolValue: bls12_381_MlResultType },
     List: { symbolValue: listGeneric },
     Pair: { symbolValue: pairGeneric },
-    scriptContextData: { symbolValue: { _tag: "Typed", type: dataType} },
+    scriptContextData: { symbolValue: { _tag: "Typed", type: dataType } },
     addInteger: makeFunc("addInteger", [intType, intType], intType),
     subtractInteger: makeFunc("subtractInteger", [intType, intType], intType),
     multiplyInteger: makeFunc("multiplyInteger", [intType, intType], intType),

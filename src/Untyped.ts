@@ -154,7 +154,14 @@ export interface Apply {
 export interface BinaryOp {
   readonly _tag: "BinaryOp"
   readonly left: Expression
-  readonly op: Token.Symbol<"+" | "-" | "*" | "/">
+  readonly op: Token.Symbol<"+" | "-" | "*" | "/" | "==">
+  readonly right: Expression
+}
+
+export interface Pipe {
+  readonly _tag: "Pipe"
+  readonly left: Expression
+  readonly op: Token.Symbol<"|">
   readonly right: Expression
 }
 
@@ -175,7 +182,7 @@ export interface Call {
 export interface Chain {
   readonly _tag: "Chain"
   readonly open: Token.Symbol<"{">
-  readonly statements: (Assign | Call)[]
+  readonly statements: (Assign | Call | Pipe)[]
   readonly returns: Expression
   readonly close: Token.Symbol<"}">
 }
@@ -406,6 +413,7 @@ export type Expression =
   | Literal
   | Member
   | Parens
+  | Pipe
   | Reference
   | Struct
   | Switch
@@ -457,6 +465,8 @@ export function sourceSpan(node: Path | Expression): Source.Span {
         node.group.open.sourceSpan,
         node.group.close.sourceSpan
       )
+    case "Pipe":
+      return node.op.sourceSpan
     case "Reference":
       return sourceSpan(node.path)
     case "Struct":
@@ -592,7 +602,39 @@ class Parser {
       return this.parseFuncDef(fnDefExpr[0], fnDefExpr[1], r)
     }
 
-    return this.parseAddSub(r)
+    return this.parsePipe(r)
+  }
+
+  private parsePipe(r: Reader): Expression {
+    let left = this.parseEquality(r)
+    let m
+
+    while ((m = r.matches(symbol("|")))) {
+      left = {
+        _tag: "Pipe",
+        left,
+        op: m,
+        right: this.parseEquality(r)
+      }
+    }
+
+    return left
+  }
+
+  private parseEquality(r: Reader): Expression {
+    let left = this.parseAddSub(r)
+    let m
+
+    while ((m = r.matches(symbol("==")))) {
+      left = {
+        _tag: "BinaryOp",
+        left,
+        op: m,
+        right: this.parseAddSub(r)
+      }
+    }
+
+    return left
   }
 
   private parseAddSub(r: Reader): Expression {
@@ -1060,7 +1102,14 @@ class Parser {
         "Unexpected ',' in chain body"
       )
     } else {
-      const body = group.fields[0].insertSemicolons(["=", "+", "&&", ":"])
+      const body = group.fields[0].insertSemicolons([
+        "=",
+        "==",
+        "+",
+        "&&",
+        ":",
+        "|"
+      ])
 
       while (!body.isEof()) {
         const part = body.readUntil(symbol(";"))
@@ -1079,7 +1128,7 @@ class Parser {
       throw new Error("Empty chain body")
     }
 
-    const statements: (Assign | Call)[] = []
+    const statements: (Assign | Call | Pipe)[] = []
 
     for (let i = 0; i < segments.length - 1; i++) {
       statements.push(this.parseChainStatement(segments[i]))
@@ -1099,7 +1148,7 @@ class Parser {
     }
   }
 
-  private parseChainStatement(r: Reader): Assign | Call {
+  private parseChainStatement(r: Reader): Assign | Call | Pipe {
     const m = r.findNext(symbol("="))
 
     if (m !== undefined) {
@@ -1127,8 +1176,10 @@ class Parser {
 
     r.end()
 
-    if (expr?._tag != "Call") {
-      throw r.syntaxError(`Expected assignment or call statement (got ${expr._tag})`)
+    if (expr?._tag != "Call" && expr?._tag != "Pipe") {
+      throw r.syntaxError(
+        `Expected assignment or call statement (got ${expr._tag})`
+      )
     }
 
     return expr
@@ -1193,7 +1244,10 @@ class Parser {
     const m = r.findNext(symbol("->"))
 
     if (m === undefined) {
-      throw new CompilerError.Syntax(colon.sourceSpan, "Expected '->' after '(...):' ")
+      throw new CompilerError.Syntax(
+        colon.sourceSpan,
+        "Expected '->' after '(...):' "
+      )
     }
 
     const arrow = m[1]
@@ -1334,7 +1388,7 @@ class Parser {
   }
 
   private parseStatements(r: Reader): Statement[] {
-    r = r.insertSemicolons(["=", "+", "&&", ":", "->"])
+    r = r.insertSemicolons(["=", "==", "+", "&&", ":", "|", "->"])
 
     let m
 

@@ -198,11 +198,8 @@ export class Reader {
       i--
       t = this.tokens[i]
     }
-    
-    return new CompilerError.Syntax(
-      Token.sourceSpan(t),
-      reason
-    )
+
+    return new CompilerError.Syntax(Token.sourceSpan(t), reason)
   }
 
   /**

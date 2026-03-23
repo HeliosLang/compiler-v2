@@ -136,7 +136,11 @@ function isInstanceOf(typed: Typed, type: Type) {
 
 function isAssignableTo(type: Type, target: Type): boolean {
   if (type._tag == "DataType" && target._tag == "DataType") {
-    return pathToString(type.path) == pathToString(target.path) || type.isError === true || target.isError === true
+    return (
+      pathToString(type.path) == pathToString(target.path) ||
+      type.isError === true ||
+      target.isError === true
+    )
   } else if (type._tag == "FuncType" && target._tag == "FuncType") {
     return (
       type.args.length == target.args.length &&
@@ -1012,6 +1016,8 @@ class Resolver {
         return this.resolveMember(expr, scope)
       case "Parens":
         return this.resolveParens(expr, scope)
+      case "Pipe":
+        return this.resolvePipe(expr, scope)
       case "Reference":
         return this.resolveReference(expr, scope)
       case "Struct":
@@ -1098,6 +1104,31 @@ class Resolver {
       close: {
         _tag: "Symbol",
         value: "]",
+        sourceSpan
+      }
+    }
+  }
+
+  private makeSyntheticCallArgGroup(
+    args: Untyped.Expression[],
+    sourceSpan: Source.Span
+  ): Token.Group<"(", Untyped.Expression> {
+    return {
+      _tag: "Group",
+      open: {
+        _tag: "Symbol",
+        value: "(",
+        sourceSpan
+      },
+      fields: args,
+      separators: args.slice(1).map(() => ({
+        _tag: "Symbol",
+        value: ",",
+        sourceSpan
+      })),
+      close: {
+        _tag: "Symbol",
+        value: ")",
         sourceSpan
       }
     }
@@ -1209,6 +1240,38 @@ class Resolver {
       )
     }
 
+    if (untyped.op.value == "==") {
+      const typeName = pathToString(left.resolved.type.path)
+
+      if (
+        typeName != "Int" &&
+        typeName != "Data" &&
+        typeName != "String" &&
+        typeName != "ByteArray" &&
+        typeName != "Bool"
+      ) {
+        throw new CompilerError.Type(
+          Untyped.sourceSpan(untyped),
+          `Unsupported equality type ${typeName}`
+        )
+      }
+
+      return {
+        ...untyped,
+        left,
+        right,
+        resolved: {
+          _tag: "Typed",
+          type: {
+            _tag: "DataType",
+            path: Untyped.makePath(Untyped.sourceSpan(untyped), "Bool"),
+            properties: {},
+            variants: {}
+          }
+        }
+      }
+    }
+
     return {
       ...untyped,
       left,
@@ -1318,21 +1381,42 @@ class Resolver {
     }
   }
 
+  private resolvePipe(untyped: Untyped.Pipe, scope: Scope): Call {
+    return this.resolveCall(
+      {
+        _tag: "Call",
+        fn: untyped.right,
+        args: this.makeSyntheticCallArgGroup(
+          [untyped.left],
+          Untyped.sourceSpan(untyped)
+        )
+      },
+      scope
+    )
+  }
+
   private resolveChain(untyped: Untyped.Chain, scope: Scope): Chain {
     const statements: (Assign | Call)[] = []
 
     for (const statement of untyped.statements) {
-      if (statement._tag == "Call") {
-        const resolvedCall = this.resolveCall(statement, scope)
+      if (statement._tag == "Call" || statement._tag == "Pipe") {
+        const resolvedStatement = this.resolveInstanceExpression(
+          statement,
+          scope
+        )
 
-        if (!isUnitType(resolvedCall.resolved.type)) {
+        if (resolvedStatement._tag != "Call") {
+          throw new Error("expected chain statement to resolve to a call")
+        }
+
+        if (!isUnitType(resolvedStatement.resolved.type)) {
           throw new CompilerError.Type(
             Untyped.sourceSpan(statement),
             "Expected Unit return type for chain statement call"
           )
         }
 
-        statements.push(resolvedCall)
+        statements.push(resolvedStatement)
       } else {
         let resolvedType: TypeGuard | undefined
         if (statement.type !== undefined) {

@@ -1256,6 +1256,87 @@ class CodeGenerator {
   }
 
   binaryOp(expr: BinaryOp): IR.Expression {
+    const sourceSpan = expr.op.sourceSpan
+    const callBuiltin = (name: string, args: IR.Expression[]): IR.Call => ({
+      _tag: "Call",
+      fn: {
+        _tag: "Reference",
+        name: {
+          _tag: "Word",
+          value: name,
+          sourceSpan
+        }
+      },
+      args: {
+        _tag: "Group",
+        open: {
+          _tag: "Symbol",
+          value: "(",
+          sourceSpan
+        },
+        fields: args,
+        separators: args.slice(1).map(() => ({
+          _tag: "Symbol",
+          value: ",",
+          sourceSpan
+        })),
+        close: {
+          _tag: "Symbol",
+          value: ")",
+          sourceSpan
+        }
+      }
+    })
+
+    if (expr.op.value == "==") {
+      const operandType = expr.left.resolved.type
+
+      if (operandType._tag != "DataType") {
+        throw new Error("expected data type for equality op")
+      }
+
+      const left = this.expression(expr.left)
+      const right = this.expression(expr.right)
+      const typeName = pathToString(operandType.path)
+
+      switch (typeName) {
+        case "Int":
+          return callBuiltin("equalsInteger", [left, right])
+        case "Data":
+          return callBuiltin("equalsData", [left, right])
+        case "String":
+          return callBuiltin("equalsString", [left, right])
+        case "ByteArray":
+          return callBuiltin("equalsByteString", [left, right])
+        case "Bool":
+          return callBuiltin("ifThenElse", [
+            left,
+            right,
+            callBuiltin("ifThenElse", [
+              right,
+              {
+                _tag: "Literal",
+                sourceSpan,
+                value: {
+                  _tag: "Bool",
+                  value: false
+                }
+              },
+              {
+                _tag: "Literal",
+                sourceSpan,
+                value: {
+                  _tag: "Bool",
+                  value: true
+                }
+              }
+            ])
+          ])
+        default:
+          throw new Error(`unsupported equality type ${typeName}`)
+      }
+    }
+
     const fn = {
       "+": "addInteger",
       "-": "subtractInteger",
@@ -1267,40 +1348,10 @@ class CodeGenerator {
       throw new Error(`unsupported binary op ${expr.op.value}`)
     }
 
-    const sourceSpan = expr.op.sourceSpan
-
-    return {
-      _tag: "Call",
-      fn: {
-        _tag: "Reference",
-        name: {
-          _tag: "Word",
-          value: fn,
-          sourceSpan
-        }
-      },
-      args: {
-        _tag: "Group",
-        open: {
-          _tag: "Symbol",
-          value: "(",
-          sourceSpan
-        },
-        fields: [this.expression(expr.left), this.expression(expr.right)],
-        separators: [
-          {
-            _tag: "Symbol",
-            value: ",",
-            sourceSpan
-          }
-        ],
-        close: {
-          _tag: "Symbol",
-          value: ")",
-          sourceSpan
-        }
-      }
-    }
+    return callBuiltin(fn, [
+      this.expression(expr.left),
+      this.expression(expr.right)
+    ])
   }
 
   call(expr: Call): IR.Call {
@@ -1833,7 +1884,7 @@ class CodeGenerator {
         }
       }
     }
-    
+
     const fields: IR.Expression[] = [
       {
         _tag: "Literal",
@@ -2142,7 +2193,11 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
       continue
     }
 
-    if (entryPoint.parameters.some(p => pathToString(p) == pathToString(definition.path))) {
+    if (
+      entryPoint.parameters.some(
+        (p) => pathToString(p) == pathToString(definition.path)
+      )
+    ) {
       continue
     }
 
@@ -2152,11 +2207,7 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
     result = wrapWithDefinition(
       pathToString(definition.path),
       dependencies.length > 0
-        ? IR.makeFuncDef(
-            dependencies.map(pathToString),
-            value,
-            false
-          )
+        ? IR.makeFuncDef(dependencies.map(pathToString), value, false)
         : value,
       result
     )

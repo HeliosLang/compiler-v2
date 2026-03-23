@@ -131,6 +131,67 @@ describe("Untyped.parseScript", () => {
     expect(body.right.op.value).toBe("*")
   })
 
+  it("parses pipe with lower precedence than arithmetic and left associativity", () => {
+    const ast = parseScript(source(`module sample value = 1 + 2 | f | g`))
+
+    const stmt = ast.statements[0]
+    expect(stmt?._tag).toBe("Assign")
+    if (stmt?._tag !== "Assign") {
+      throw new Error("expected Assign statement")
+    }
+
+    const expr = stmt.rhs
+    expect(expr._tag).toBe("Pipe")
+    if (expr._tag !== "Pipe") {
+      throw new Error("expected outer Pipe expression")
+    }
+
+    expect(expr.right._tag).toBe("Reference")
+
+    const left = expr.left
+    expect(left._tag).toBe("Pipe")
+    if (left._tag !== "Pipe") {
+      throw new Error("expected left-associative Pipe expression")
+    }
+
+    expect(left.right._tag).toBe("Reference")
+    expect(left.left._tag).toBe("BinaryOp")
+    if (left.left._tag !== "BinaryOp") {
+      throw new Error("expected arithmetic expression on pipe lhs")
+    }
+
+    expect(left.left.op.value).toBe("+")
+  })
+
+  it("parses equality with lower precedence than arithmetic and higher than pipe", () => {
+    const ast = parseScript(source(`module sample value = 1 + 2 == 3 | f`))
+
+    const stmt = ast.statements[0]
+    expect(stmt?._tag).toBe("Assign")
+    if (stmt?._tag !== "Assign") {
+      throw new Error("expected Assign statement")
+    }
+
+    const expr = stmt.rhs
+    expect(expr._tag).toBe("Pipe")
+    if (expr._tag !== "Pipe") {
+      throw new Error("expected outer Pipe expression")
+    }
+
+    expect(expr.left._tag).toBe("BinaryOp")
+    if (expr.left._tag !== "BinaryOp") {
+      throw new Error("expected equality expression on pipe lhs")
+    }
+
+    expect(expr.left.op.value).toBe("==")
+    expect(expr.left.left._tag).toBe("BinaryOp")
+    if (expr.left.left._tag !== "BinaryOp") {
+      throw new Error("expected arithmetic expression on equality lhs")
+    }
+
+    expect(expr.left.left.op.value).toBe("+")
+  })
+
   it("parses chain expressions with statements and return value", () => {
     const ast = parseScript(source(`module sample decision: { ping(); ok }`))
 

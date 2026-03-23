@@ -6,13 +6,13 @@ const src = `validator anchor
 export SEED: Data
 
 export main = (redeemer: Data) -> {
-    ctx = sndPair(unConstrData(scriptContextData))
-    tx = sndPair(unConstrData(headList(ctx)))
+    ctx = unConstrData(scriptContextData) | sndPair
+    tx = headList(ctx) | unConstrData | sndPair
 
     redeemer_pair = unConstrData(redeemer)
     redeemer_tag = fstPair(redeemer_pair)
 
-    if (equalsInteger(redeemer_tag, 0)) {
+    if (redeemer_tag == 0) {
         if (spends_seed(unListData(headList(tx)))) {
             ()
         } else {
@@ -21,9 +21,9 @@ export main = (redeemer: Data) -> {
     } else {
         // index of the state input/ref-input
         ptr_fields = sndPair(redeemer_pair)
-        input_ptr = unIData(headList(ptr_fields))
-        witness_ptr = unIData(headList(tailList(ptr_fields)))
-        signer_ptr = unIData(headList(tailList(tailList(ptr_fields))))
+        input_ptr = headList(ptr_fields) | unIData
+        witness_ptr = tailList(ptr_fields) | headList | unIData
+        signer_ptr = tailList(ptr_fields) | tailList | headList | unIData
 
         own_hash = get_own_hash(
             headList(tailList(tailList(ctx))),
@@ -31,16 +31,16 @@ export main = (redeemer: Data) -> {
         )
 
         inputs = unListData(
-            if (equalsInteger(redeemer_tag, 1)) {
+            if (redeemer_tag == 1) {
                 headList(tx)
             } else {
                 headList(tailList(tx))
             }
         )
 
-        input = sndPair(unConstrData(get(inputs, input_ptr, 0)))
-        input_output = sndPair(unConstrData(headList(tailList(input))))
-        input_assets = unMapData(headList(tailList(input_output)))
+        input = get(inputs, input_ptr, 0) | unConstrData | sndPair
+        input_output = tailList(input) | headList | unConstrData | sndPair
+        input_assets = tailList(input_output) | headList | unMapData
 
         // make sure the input contains at least one state asset
         if (assets_contain(input_assets, own_hash)) {
@@ -50,11 +50,11 @@ export main = (redeemer: Data) -> {
             witness = unConstrData(get(input_datum, witness_ptr, 0))
             witness_tag = fstPair(witness)
 
-            if (equalsInteger(witness_tag, 0)) {
+            if (witness_tag == 0) {
                 // signed by PubKeyHash
                 pkh = get(unListData(headList(tailList(tailList(tailList(tailList(tailList(tailList(tailList(tailList(tx)))))))))), signer_ptr, 0)
 
-                if (equalsData(pkh, headList(sndPair(witness)))) {
+                if (pkh == headList(sndPair(witness))) {
                     ()
                 } else {
                     error()
@@ -63,7 +63,7 @@ export main = (redeemer: Data) -> {
                 // witnessed by staking credential in withdrawal
                 pair = get_pair(unMapData(headList(tailList(tailList(tailList(tailList(tailList(tailList(tx)))))))), signer_ptr, 0)
 
-                if (equalsData(fstPair(pair), headList(sndPair(witness)))) {
+                if (fstPair(pair) == headList(sndPair(witness))) {
                     ()
                 } else {
                     error()
@@ -78,7 +78,7 @@ export main = (redeemer: Data) -> {
 spends_seed = (inputs: List[Data]): Bool -> {
     if (nullList(inputs)) {
         false
-    } else if (equalsData(headList(sndPair(unConstrData(headList(inputs)))), SEED)) {
+    } else if (headList(sndPair(unConstrData(headList(inputs)))) == SEED) {
         true
     } else {
         spends_seed(tailList(inputs))
@@ -90,18 +90,18 @@ get_own_hash = (purpose: Data, tx: List[Data]): Data -> {
     purpose_tag = fstPair(purpose_pair)
     purpose_fields = sndPair(purpose_pair)
 
-    if (equalsInteger(purpose_tag, 0)) {
+    if (purpose_tag == 0) {
         // minting
         headList(purpose_fields)
-    } else if (equalsInteger(purpose_tag, 1)) {
+    } else if (purpose_tag == 1) {
         // spending validator credential
         input = find_input(unListData(headList(tx)), headList(purpose_fields))
 
         headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(tailList(input)))))))))))
-    } else if (equalsInteger(purpose_tag, 2)) {
+    } else if (purpose_tag == 2) {
         // rewarding
         headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(purpose_fields)))))))
-    } else if (equalsInteger(purpose_tag, 3)) {
+    } else if (purpose_tag == 3) {
         // certifying
         cert = headList(tailList(purpose_fields))
         cert_pair = unConstrData(cert)
@@ -113,7 +113,7 @@ get_own_hash = (purpose: Data, tx: List[Data]): Data -> {
         } else {
             headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(cert_fields)))))))
         }
-    } else if (equalsInteger(purpose_tag, 4)) {
+    } else if (purpose_tag == 4) {
         // voting
         headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(purpose_fields))))))))))
     } else {
@@ -124,7 +124,7 @@ get_own_hash = (purpose: Data, tx: List[Data]): Data -> {
 find_input = (inputs: List[Data], ref: Data): List[Data] -> {
     input = sndPair(unConstrData(headList(inputs)))
 
-    if (equalsData(headList(input), ref)) {
+    if (headList(input) == ref) {
         input
     } else {
         find_input(tailList(inputs), ref)
@@ -132,7 +132,7 @@ find_input = (inputs: List[Data], ref: Data): List[Data] -> {
 }
 
 get = (inputs: List[Data], index: Int, running_idx: Int): Data -> {
-    if (equalsInteger(index, running_idx)) {
+    if (index == running_idx) {
         headList(inputs)
     } else {
         get(inputs, index, addInteger(running_idx, 1))
@@ -140,7 +140,7 @@ get = (inputs: List[Data], index: Int, running_idx: Int): Data -> {
 }
 
 get_pair = (inputs: List[Pair[Data, Data]], index: Int, running_idx: Int): Pair[Data, Data] -> {
-    if (equalsInteger(index, running_idx)) {
+    if (index == running_idx) {
         headList(inputs)
     } else {
         get_pair(tailList(inputs), index, addInteger(running_idx, 1))
@@ -153,7 +153,7 @@ assets_contain = (assets: List[Pair[Data, Data]], policy: Data): Bool -> {
     } else {
         entry = headList(assets)
 
-        if (equalsData(fstPair(entry), policy)) {
+        if (fstPair(entry) == policy) {
             true
         } else {
             assets_contain(tailList(assets), policy)
@@ -163,14 +163,17 @@ assets_contain = (assets: List[Pair[Data, Data]], policy: Data): Bool -> {
 
 describe("anchor", () => {
   it("compiles the embedded validator source", () => {
-    const entryPoints = compile([
+    const entryPoints = compile(
+      [
+        {
+          name: "anchor.hl",
+          content: src
+        }
+      ],
       {
-        name: "anchor.hl",
-        content: src
+        positionalParams: ["anchor::SEED"]
       }
-    ], {
-      positionalParams: ["anchor::SEED"]
-    })
+    )
 
     expect(entryPoints["anchor::main"]).toBeDefined()
 

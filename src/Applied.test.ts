@@ -113,6 +113,19 @@ const literal = (value: bigint): Applied.Literal => ({
   }
 })
 
+const boolLiteral = (value: boolean): Applied.Literal => ({
+  _tag: "Literal" as const,
+  value: {
+    _tag: "Bool" as const,
+    value,
+    sourceSpan: dummySpan()
+  },
+  resolved: {
+    _tag: "Typed" as const,
+    type: dataType("Bool")
+  }
+})
+
 const reference = (
   name: string,
   type: Typed.Type = dataType("Int")
@@ -503,6 +516,58 @@ describe("generateIR", () => {
     expect(irRefName(result.fn)).toBe("addInteger")
     expect(result.args.fields.length).toBe(2)
   })
+
+  it("lowers integer equality into equalsInteger", () => {
+    const expr: Applied.BinaryOp = {
+      _tag: "BinaryOp",
+      left: literal(1n),
+      op: symbol("=="),
+      right: literal(2n),
+      resolved: {
+        _tag: "Typed",
+        type: dataType("Bool")
+      }
+    }
+
+    const result = Applied.generateIR(expr)
+
+    expect(result._tag).toBe("Call")
+    if (result._tag !== "Call") {
+      throw new Error("expected call")
+    }
+
+    expect(irRefName(result.fn)).toBe("equalsInteger")
+  })
+
+  it("lowers bool equality into nested ifThenElse", () => {
+    const expr: Applied.BinaryOp = {
+      _tag: "BinaryOp",
+      left: boolLiteral(true),
+      op: symbol("=="),
+      right: boolLiteral(false),
+      resolved: {
+        _tag: "Typed",
+        type: dataType("Bool")
+      }
+    }
+
+    const result = Applied.generateIR(expr)
+
+    expect(result._tag).toBe("Call")
+    if (result._tag !== "Call") {
+      throw new Error("expected call")
+    }
+
+    expect(irRefName(result.fn)).toBe("ifThenElse")
+
+    const nested = result.args.fields[2]
+    expect(nested?._tag).toBe("Call")
+    if (nested === undefined || nested._tag !== "Call") {
+      throw new Error("expected nested call")
+    }
+
+    expect(irRefName(nested.fn)).toBe("ifThenElse")
+  })
 })
 
 describe("generateEntryPointIR", () => {
@@ -578,6 +643,8 @@ loop = (n: Int): Int -> loop(n)`
       throw new Error("expected recursive::main entrypoint")
     }
 
-    expect(() => IR.generateUplc(Applied.generateEntryPointIR(main))).not.toThrow()
+    expect(() =>
+      IR.generateUplc(Applied.generateEntryPointIR(main))
+    ).not.toThrow()
   })
 })

@@ -43,6 +43,44 @@ const mapGeneric: GenericValue = {
   type: ([key, value]) => dataType("Map", [key, value])
 }
 
+const headListGeneric: GenericValue = {
+  _tag: "GenericValue",
+  nArgs: 1,
+  inferCall: ([list]) => {
+    const item = list.path.appliedTypes?.[0]
+
+    if (item === undefined) {
+      throw new Error("headList() expects a list argument")
+    }
+
+    return [item]
+  },
+  type: ([item]) => ({
+    _tag: "Typed",
+    path: makePath("headList"),
+    type: {
+      _tag: "FuncType",
+      args: [listGeneric.type([item]) as DataType],
+      returns: item
+    }
+  })
+}
+
+const pipeIdGeneric: GenericValue = {
+  _tag: "GenericValue",
+  nArgs: 1,
+  inferCall: ([value]) => [value],
+  type: ([value]) => ({
+    _tag: "Typed",
+    path: makePath("pipeId"),
+    type: {
+      _tag: "FuncType",
+      args: [value],
+      returns: value
+    }
+  })
+}
+
 const builtins: Scope = {
   Bool: dataType("Bool"),
   Int: dataType("Int"),
@@ -50,7 +88,9 @@ const builtins: Scope = {
   String: dataType("String"),
   Real: dataType("Real"),
   List: listGeneric,
-  Map: mapGeneric
+  Map: mapGeneric,
+  headList: headListGeneric,
+  pipeId: pipeIdGeneric
 }
 
 describe("Typed.parseScripts", () => {
@@ -218,5 +258,76 @@ describe("Typed.parseScripts", () => {
         builtins
       )
     ).toThrow(/Switch branches must return compatible types/)
+  })
+
+  it("resolves supported equality expressions to Bool", () => {
+    const scripts = parseScripts(
+      [source("eq.hl", `module eq; export ok = 1 == 1`)],
+      builtins
+    )
+
+    const eq = scripts["eq"]
+    if (eq === undefined) {
+      throw new Error("expected script 'eq'")
+    }
+
+    const ok = eq.resolved.members["ok"]
+    if (ok?._tag !== "Typed" || ok.type._tag !== "DataType") {
+      throw new Error("expected 'ok' to be a Typed DataType")
+    }
+
+    expect(pathToString(ok.type.path)).toBe("Bool")
+  })
+
+  it("throws on unsupported equality types", () => {
+    expect(() =>
+      parseScripts(
+        [source("eq-real.hl", `module eqReal; export bad = 1.0 == 1.0`)],
+        builtins
+      )
+    ).toThrow(/Unsupported equality type Real/)
+  })
+
+  it("lowers pipes into inferred generic calls", () => {
+    const scripts = parseScripts(
+      [source("pipe.hl", `module pipe; export first = true | pipeId`)],
+      builtins
+    )
+
+    const pipe = scripts["pipe"]
+    if (pipe === undefined) {
+      throw new Error("expected script 'pipe'")
+    }
+
+    const stmt = pipe.statements[0]
+    expect(stmt?._tag).toBe("Assign")
+    if (stmt?._tag !== "Assign") {
+      throw new Error("expected Assign statement")
+    }
+
+    expect(stmt.rhs._tag).toBe("Call")
+    if (stmt.rhs._tag !== "Call") {
+      throw new Error("expected pipe rhs to lower to Call")
+    }
+
+    expect(stmt.rhs.fn._tag).toBe("Apply")
+    if (stmt.rhs.fn._tag !== "Apply") {
+      throw new Error("expected generic pipe rhs to lower to Apply")
+    }
+
+    expect(stmt.rhs.fn.args.fields).toHaveLength(1)
+    const typeArg = stmt.rhs.fn.args.fields[0]
+    expect(typeArg._tag).toBe("Reference")
+    if (typeArg._tag !== "Reference") {
+      throw new Error("expected inferred type arg to be a Reference")
+    }
+
+    expect(pathToString(typeArg.path)).toBe("Bool")
+    expect(stmt.rhs.resolved.type._tag).toBe("DataType")
+    if (stmt.rhs.resolved.type._tag !== "DataType") {
+      throw new Error("expected pipe result to be a DataType")
+    }
+
+    expect(pathToString(stmt.rhs.resolved.type.path)).toBe("Bool")
   })
 })
