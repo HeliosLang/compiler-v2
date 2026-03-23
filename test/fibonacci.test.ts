@@ -3,15 +3,27 @@ import { runSync } from "effect/Effect"
 import { compile } from "../src/index.js"
 import { Uplc } from "@helios-lang/effect/Cardano"
 
-describe("indexByteString", () => {
+describe("tail-recursive fibonacci", () => {
   function compileFibScriptRoot(): Uplc.Script.Script<3> {
     const entryPoints = compile(
       [
         {
           name: "fib.hl",
           content: `module fib;
+  fib_tail = (remaining: Int, current: Int, next: Int): Int -> {
+    if (equalsInteger(remaining, 0)) {
+      current
+    } else {
+      fib_tail(
+        subtractInteger(remaining, 1),
+        next,
+        addInteger(current, next)
+      )
+    }
+  }
+
   export fib = (n: Int): Int -> {
-    indexByteString(#000101020305080d, n)
+    fib_tail(n, 0, 1)
   }`
         }
       ],
@@ -42,7 +54,7 @@ describe("indexByteString", () => {
     return result.value.right
   }
 
-  it("compiles and evaluates hardcoded fibonacci numbers via Uplc.Cek.eval", () => {
+  it("compiles and evaluates fibonacci via tail recursion", () => {
     const root = compileFibScriptRoot()
 
     const expected: [bigint, bigint][] = [
@@ -53,7 +65,10 @@ describe("indexByteString", () => {
       [4n, 3n],
       [5n, 5n],
       [6n, 8n],
-      [7n, 13n]
+      [7n, 13n],
+      [8n, 21n],
+      [9n, 34n],
+      [10n, 55n]
     ]
 
     for (const [input, output] of expected) {

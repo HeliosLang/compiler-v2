@@ -142,6 +142,15 @@ function makeGlobals(): Applied.Globals {
   const fstPairGeneric: Typed.GenericValue = {
     _tag: "GenericValue",
     nArgs: 2,
+    inferCall: ([pair]) => {
+      const [first, second] = pair.path.appliedTypes ?? []
+
+      if (first === undefined || second === undefined) {
+        throw new Error("fstPair() expects a pair argument")
+      }
+
+      return [first, second]
+    },
     type: ([first, second]) => ({
       _tag: "Typed",
       path: makePath("fstPair"),
@@ -156,6 +165,15 @@ function makeGlobals(): Applied.Globals {
   const sndPairGeneric: Typed.GenericValue = {
     _tag: "GenericValue",
     nArgs: 2,
+    inferCall: ([pair]) => {
+      const [first, second] = pair.path.appliedTypes ?? []
+
+      if (first === undefined || second === undefined) {
+        throw new Error("sndPair() expects a pair argument")
+      }
+
+      return [first, second]
+    },
     type: ([first, second]) => ({
       _tag: "Typed",
       path: makePath("sndPair"),

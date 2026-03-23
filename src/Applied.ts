@@ -441,12 +441,11 @@ class Applier {
       if (picked.length == 0) {
         break
       } else {
-        // the first definition in the mutually dependent group determines the order of the deps
-        const deps = (picked[0].dependencies ?? []).filter((d) =>
-          pickedNonDoneDeps.has(pathToString(d))
-        )
-
         for (const def of picked) {
+          const deps = (def.dependencies ?? []).filter((d) => {
+            const depKey = pathToString(d)
+            return depKey in graph && !done.has(depKey)
+          })
           const expr =
             deps.length > 0
               ? applyMutualDependenciesToReferences(def.expr, deps)
@@ -1191,10 +1190,13 @@ function applyMutualDependenciesToReferences(
       }
     case "Raw":
       return expr
-    case "Reference":
-      return depSet.has(pathToString(expr.path))
+    case "Reference": {
+      const refPath = expr.resolved.path ?? expr.path
+
+      return depSet.has(pathToString(refPath))
         ? { ...expr, dependencies: deps }
         : expr
+    }
     case "SingleParens":
       return {
         ...expr,
@@ -1819,8 +1821,19 @@ class CodeGenerator {
     )
   }
 
-  multiParens(expr: MultiParens): IR.Call {
+  multiParens(expr: MultiParens): IR.Expression {
     const sourceSpan = expr.group.open.sourceSpan
+
+    if (expr.group.fields.length == 0) {
+      return {
+        _tag: "Literal",
+        sourceSpan,
+        value: {
+          _tag: "Unit"
+        }
+      }
+    }
+    
     const fields: IR.Expression[] = [
       {
         _tag: "Literal",
@@ -1872,13 +1885,12 @@ class CodeGenerator {
     })
   }
 
-  reference(expr: Reference): IR.Reference {
+  reference(expr: Reference): IR.Expression {
     const path = expr.resolved.path ?? expr.path
     const last = path.names.at(-1)
     const sourceSpan =
       path.names.length == 1 && last ? last.sourceSpan : Source.DummySpan()
-
-    return {
+    const ref: IR.Reference = {
       _tag: "Reference",
       name: {
         _tag: "Word",
@@ -1886,6 +1898,13 @@ class CodeGenerator {
         sourceSpan
       }
     }
+
+    return expr.dependencies && expr.dependencies.length > 0
+      ? IR.makeCall(
+          ref,
+          expr.dependencies.map((dep) => IR.makeReference(pathToString(dep)))
+        )
+      : ref
   }
 
   singleParens(expr: SingleParens): IR.Expression {
@@ -2048,11 +2067,18 @@ export function generateIR(expr: Expression): IR.Expression {
 }
 
 export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
-  let result = generateIR(entryPoint.body)
+  const body = entryPoint.definitions.reduce((expr, definition) => {
+    const dependencies = definition.dependencies ?? []
+
+    return dependencies.length > 0
+      ? applyMutualDependenciesToReferences(expr, dependencies)
+      : expr
+  }, entryPoint.body)
+  let result = generateIR(body)
 
   // wrap with data conversion of args
   if (entryPoint.isValidator) {
-    if (entryPoint.body._tag != "FuncDef") {
+    if (body._tag != "FuncDef") {
       throw new Error("Unexpected")
     }
 
@@ -2066,7 +2092,7 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
       ])
     ])
 
-    const redeemerArg = entryPoint.body.args.fields[0]
+    const redeemerArg = body.args.fields[0]
     if (redeemerArg.type._tag != "DataType") {
       throw new Error("Unexpected")
     }
@@ -2083,14 +2109,14 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
     // wrap with a call with the redeemer arg (headList(tailList(sndPair(unConstrData(scriptContextData)))))
     result = IR.makeCall(result, [redeemerExpr])
   } else if (
-    entryPoint.body._tag == "FuncDef" &&
-    entryPoint.body.args.fields.some(
+    body._tag == "FuncDef" &&
+    body.args.fields.some(
       (f) => f.type._tag == "DataType" && pathToString(f.type.path) != "Data"
     )
   ) {
     result = IR.makeCall(
       result,
-      entryPoint.body.args.fields.map((f) => {
+      body.args.fields.map((f) => {
         if (f.type._tag == "DataType" && pathToString(f.type.path) != "Data") {
           return IR.makeCall(
             IR.makeReference(pathToString(f.type.path) + "::" + ":from_data"),
@@ -2103,7 +2129,7 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
     )
 
     result = IR.makeFuncDef(
-      entryPoint.body.args.fields.map((f) => f.name.value),
+      body.args.fields.map((f) => f.name.value),
       result,
       true
     )
@@ -2116,9 +2142,22 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
       continue
     }
 
+    if (entryPoint.parameters.some(p => pathToString(p) == pathToString(definition.path))) {
+      continue
+    }
+
+    const value = generateIR(definition.expr)
+    const dependencies = definition.dependencies ?? []
+
     result = wrapWithDefinition(
       pathToString(definition.path),
-      generateIR(definition.expr),
+      dependencies.length > 0
+        ? IR.makeFuncDef(
+            dependencies.map(pathToString),
+            value,
+            false
+          )
+        : value,
       result
     )
   }

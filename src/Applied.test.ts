@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import * as Source from "./Source.js"
 import * as Applied from "./Applied.js"
-import type * as IR from "./IR.js"
+import * as IR from "./IR.js"
 import * as Typed from "./Typed.js"
 import * as Untyped from "./Untyped.js"
 
@@ -557,5 +557,27 @@ describe("generateEntryPointIR", () => {
     }
 
     expect(defCall.fn.body.expr.name.value).toBe("result")
+  })
+
+  it("binds self-recursive top-level functions before lowering to UPLC", () => {
+    const entryPoints = Applied.parseEntryPoints(
+      [
+        {
+          name: "recursive.hl",
+          content: `validator recursive;
+export main = (n: Int): Int -> loop(n)
+loop = (n: Int): Int -> loop(n)`
+        }
+      ],
+      { globals }
+    )
+
+    const main = entryPoints["recursive::main"]
+
+    if (main === undefined) {
+      throw new Error("expected recursive::main entrypoint")
+    }
+
+    expect(() => IR.generateUplc(Applied.generateEntryPointIR(main))).not.toThrow()
   })
 })

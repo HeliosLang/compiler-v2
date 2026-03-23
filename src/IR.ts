@@ -114,11 +114,13 @@ export function generateUplc(
 }
 
 export interface PrettyOptions {
+  readonly maxLineLength?: number | undefined
   readonly newline?: string | undefined
   readonly tab?: string | undefined
 }
 
 export function pretty(expr: Expression, options: PrettyOptions = {}): string {
+  const maxLineLength = options.maxLineLength ?? 80
   const newline = options.newline ?? "\n"
   const tab = options.tab ?? "  "
 
@@ -141,20 +143,196 @@ export function pretty(expr: Expression, options: PrettyOptions = {}): string {
     }
   }
 
-  const format = (expr: Expression, depth: number): string => {
-    const indent = tab.repeat(depth)
-    const nextIndent = tab.repeat(depth + 1)
+  const assignmentChain = (
+    expr: Expression
+  ):
+    | {
+        assignments: { name: string; value: Expression }[]
+        result: Expression
+      }
+    | undefined => {
+    const assignments: { name: string; value: Expression }[] = []
+    let current = expr
 
+    while (
+      current._tag == "Call" &&
+      current.fn._tag == "FuncDef" &&
+      current.fn.args.fields.length == 1 &&
+      current.args.fields.length == 1
+    ) {
+      const arg = current.fn.args.fields[0]
+      const value = current.args.fields[0]
+
+      if (arg === undefined || value === undefined) {
+        break
+      }
+
+      assignments.push({
+        name: arg.value,
+        value
+      })
+      current = current.fn.body.expr
+    }
+
+    return assignments.length > 0
+      ? {
+          assignments,
+          result: current
+        }
+      : undefined
+  }
+
+  const indentLines = (text: string, indent: string): string => {
+    if (text == "") {
+      return text
+    }
+
+    return text
+      .split(newline)
+      .map((line) => `${indent}${line}`)
+      .join(newline)
+  }
+
+  const indentFirstLine = (text: string, indent: string): string => {
+    if (text == "") {
+      return text
+    }
+
+    const lines = text.split(newline)
+    lines[0] = `${indent}${lines[0]}`
+    return lines.join(newline)
+  }
+
+  const fitsOnLine = (
+    text: string,
+    depth: number,
+    firstLinePrefixLength: number = 0
+  ): boolean => {
+    return (
+      !text.includes(newline) &&
+      tab.repeat(depth).length + firstLinePrefixLength + text.length <=
+        maxLineLength
+    )
+  }
+
+  const formatSingle = (expr: Expression): string => {
     switch (expr._tag) {
       case "Call": {
-        const fn = format(expr.fn, depth)
+        const chain = assignmentChain(expr)
+
+        if (chain !== undefined) {
+          return `{${chain.assignments
+            .map((assignment) => {
+              return `${assignment.name} = ${formatSingle(assignment.value)}`
+            })
+            .join("; ")}; ${formatSingle(chain.result)}}`
+        }
+
+        const fn = formatSingle(expr.fn)
 
         if (expr.args.fields.length == 0) {
           return `${fn}()`
         }
 
-        if (newline == "") {
-          return `${fn}(${expr.args.fields.map((arg) => format(arg, depth)).join(", ")})`
+        return `${fn}(${expr.args.fields.map((arg) => formatSingle(arg)).join(", ")})`
+      }
+      case "Error":
+        return "error()"
+      case "FuncDef": {
+        const args = expr.args.fields.map((arg) => arg.value).join(", ")
+        return `(${args}) -> {${formatSingleBody(expr.body.expr)}}`
+      }
+      case "Literal":
+        return literal(expr.value)
+      case "Reference":
+        return `${expr.name.value}${expr.isSafe === true ? "!" : ""}`
+    }
+  }
+
+  const formatSingleBody = (expr: Expression): string => {
+    const chain = assignmentChain(expr)
+
+    return chain !== undefined
+      ? `${chain.assignments
+          .map((assignment) => {
+            return `${assignment.name} = ${formatSingle(assignment.value)}`
+          })
+          .join("; ")}; ${formatSingle(chain.result)}`
+      : formatSingle(expr)
+  }
+
+  const format = (
+    expr: Expression,
+    depth: number,
+    firstLinePrefixLength: number = 0
+  ): string => {
+    if (newline == "") {
+      return formatSingle(expr)
+    }
+
+    const single = formatSingle(expr)
+
+    if (fitsOnLine(single, depth, firstLinePrefixLength)) {
+      return single
+    }
+
+    const indent = tab.repeat(depth)
+    const nextIndent = tab.repeat(depth + 1)
+    const formatBody = (expr: Expression): string => {
+      const chain = assignmentChain(expr)
+
+      if (chain === undefined) {
+        return indentFirstLine(format(expr, depth + 1, nextIndent.length), nextIndent)
+      }
+
+      return [
+        ...chain.assignments.map((assignment) => {
+          const prefix = `${assignment.name} = `
+          const value = format(
+            assignment.value,
+            0,
+            nextIndent.length + prefix.length
+          )
+          return indentLines(
+            `${assignment.name} = ${value}`,
+            nextIndent
+          )
+        }),
+        indentLines(format(chain.result, 0, nextIndent.length), nextIndent)
+      ].join(newline)
+    }
+
+    switch (expr._tag) {
+      case "Call": {
+        const chain = assignmentChain(expr)
+
+        if (chain !== undefined) {
+          return [
+            "{",
+            ...chain.assignments.map((assignment) => {
+              const prefix = `${assignment.name} = `
+              const value = format(
+                assignment.value,
+                0,
+                nextIndent.length + prefix.length
+              )
+              return indentLines(
+                `${assignment.name} = ${value}`,
+                nextIndent
+              )
+            }),
+            indentLines(
+              format(chain.result, 0, nextIndent.length),
+              nextIndent
+            ),
+            `${indent}}`
+          ].join(newline)
+        }
+
+        const fn = format(expr.fn, depth)
+
+        if (expr.args.fields.length == 0) {
+          return `${fn}()`
         }
 
         return `${fn}(${newline}${expr.args.fields
@@ -165,18 +343,12 @@ export function pretty(expr: Expression, options: PrettyOptions = {}): string {
         return "error()"
       case "FuncDef": {
         const args = expr.args.fields.map((arg) => arg.value).join(", ")
-        const body = format(expr.body.expr, depth + 1)
 
-        if (newline == "") {
-          return `(${args}) -> {${format(expr.body.expr, depth)}}`
-        }
-
-        return `(${args}) -> {${newline}${nextIndent}${body}${newline}${indent}}`
+        return `(${args}) -> {${newline}${formatBody(expr.body.expr)}${newline}${indent}}`
       }
       case "Literal":
-        return literal(expr.value)
       case "Reference":
-        return `${expr.name.value}${expr.isSafe === true ? "!" : ""}`
+        return single
     }
   }
 

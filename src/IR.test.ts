@@ -234,18 +234,18 @@ describe("IR generateUplc", () => {
 })
 
 describe("IR pretty", () => {
-  it("formats expressions as compact single-line IR", () => {
+  it("formats expressions as single-line IR when they fit", () => {
     const expr = parse(source("(a, b)->{addInteger(a, b)}"))
 
-    expect(pretty(expr, { newline: "", tab: "" })).toBe(
+    expect(pretty(expr)).toBe(
       "(a, b) -> {addInteger(a, b)}"
     )
   })
 
-  it("formats expressions with configurable newlines and tabs", () => {
+  it("formats expressions with configurable newlines and tabs when forced to wrap", () => {
     const expr = parse(source("(a, b)->{addInteger(a, b)}"))
 
-    expect(pretty(expr, { newline: "\n", tab: "    " })).toBe(
+    expect(pretty(expr, { maxLineLength: 19, newline: "\n", tab: "    " })).toBe(
       [
         "(a, b) -> {",
         "    addInteger(",
@@ -254,6 +254,71 @@ describe("IR pretty", () => {
         "    )",
         "}"
       ].join("\n")
+    )
+  })
+
+  it("formats immediately-applied single-arg funcs as assignment sugar", () => {
+    const expr = parse(source("((x)->{addInteger(x, 1)})(2)"))
+
+    expect(pretty(expr)).toBe(
+      "{x = 2; addInteger(x, 1)}"
+    )
+  })
+
+  it("formats nested immediately-applied single-arg funcs as chained assignments", () => {
+    const expr = parse(source("((x)->{((y)->{addInteger(x, y)})(2)})(1)"))
+
+    expect(pretty(expr, { maxLineLength: 12, newline: "\n", tab: "    " })).toBe(
+      ["{", "    x = 1", "    y = 2", "    addInteger(", "        x,", "        y", "    )", "}"].join("\n")
+    )
+  })
+
+  it("doesn't print duplicate braces for sugared function bodies", () => {
+    const expr = parse(source("(x)->{((y)->{addInteger(x, y)})(2)}"))
+
+    expect(pretty(expr)).toBe(
+      "(x) -> {y = 2; addInteger(x, y)}"
+    )
+  })
+
+  it("doesn't print a spurious opening brace in wrapped function bodies", () => {
+    const expr = parse(source("(x)->{((y)->{addInteger(x, y)})(1234567890)}"))
+
+    expect(pretty(expr, { maxLineLength: 19, newline: "\n", tab: "    " })).toBe(
+      [
+        "(x) -> {",
+        "    y = 1234567890",
+        "    addInteger(",
+        "        x,",
+        "        y",
+        "    )",
+        "}"
+      ].join("\n")
+    )
+  })
+
+  it("indents the first wrapped line in nested function bodies correctly", () => {
+    const expr = parse(source("(x)->{(a, b)->{addInteger(a, b)}}"))
+
+    expect(pretty(expr, { maxLineLength: 19, newline: "\n", tab: "    " })).toBe(
+      [
+        "(x) -> {",
+        "    (a, b) -> {",
+        "        addInteger(",
+        "            a,",
+        "            b",
+        "        )",
+        "    }",
+        "}"
+      ].join("\n")
+    )
+  })
+
+  it("accounts for indent when deciding whether to wrap", () => {
+    const expr = parse(source("((value)->{value})(1234567890)"))
+
+    expect(pretty(expr, { maxLineLength: 20, newline: "\n", tab: "    " })).toBe(
+      ["{", "    value = 1234567890", "    value", "}"].join("\n")
     )
   })
 })
