@@ -192,6 +192,30 @@ describe("Untyped.parseScript", () => {
     expect(expr.left.left.op.value).toBe("+")
   })
 
+  it("parses as with higher precedence than arithmetic", () => {
+    const ast = parseScript(source(`module sample value = data as Int + 1`))
+
+    const stmt = ast.statements[0]
+    expect(stmt?._tag).toBe("Assign")
+    if (stmt?._tag !== "Assign") {
+      throw new Error("expected Assign statement")
+    }
+
+    const expr = stmt.rhs
+    expect(expr._tag).toBe("BinaryOp")
+    if (expr._tag !== "BinaryOp") {
+      throw new Error("expected BinaryOp expression")
+    }
+
+    expect(expr.op.value).toBe("+")
+    expect(expr.left._tag).toBe("As")
+    if (expr.left._tag !== "As") {
+      throw new Error("expected cast on lhs of addition")
+    }
+
+    expect(expr.left.right._tag).toBe("Reference")
+  })
+
   it("parses chain expressions with statements and return value", () => {
     const ast = parseScript(source(`module sample decision: { ping(); ok }`))
 

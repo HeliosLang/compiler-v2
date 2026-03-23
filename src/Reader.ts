@@ -19,7 +19,7 @@ const any$: Matcher<Token.Token> = (t) => t
 
 export { any$ as any }
 
-const reserved = ["copy", "else", "if", "switch"]
+const reserved = ["as", "copy", "else", "if", "switch"]
 
 export const anyName: Matcher<Token.Word> = (t) =>
   t._tag == "Word" && !t.value.startsWith("__") && !reserved.includes(t.value)

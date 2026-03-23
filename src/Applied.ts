@@ -491,22 +491,7 @@ class Applier {
         const { applied, dependencies } = this.applyExpression(head.expr)
 
         if (isEntryPoint) {
-          /**
-           * For the entrypoint only: all arguments that aren't `Data`-type require the <type>:::from_data internal method
-           */
-          if (head.expr._tag == "FuncDef") {
-            for (const arg of head.expr.args.fields) {
-              if (
-                arg.type.resolved._tag == "DataType" &&
-                pathToString(arg.type.resolved.path) != "Data"
-              ) {
-                dependencies.push({
-                  ...arg.type.resolved.path,
-                  component: "from_data"
-                })
-              }
-            }
-          }
+          // Entry point argument decoding is inlined in generateEntryPointIR().
         }
 
         definitions[headPathStr] = {
@@ -568,6 +553,8 @@ class Applier {
           dependencies: path.names.length < 2 ? [] : [path]
         }
       }
+      case "As":
+        return this.applyAs(expr)
       case "BinaryOp": {
         const left = this.applyExpression(expr.left)
         const right = this.applyExpression(expr.right)
@@ -737,6 +724,66 @@ class Applier {
           dependencies: right.dependencies
         }
       }
+    }
+  }
+
+  private applyAs(expr: Typed.As): {
+    applied: Expression
+    dependencies: Path[]
+  } {
+    const left = this.applyExpression(expr.left)
+    const targetType = expr.resolved.type
+    const fromData = targetType.from_data
+
+    if (fromData === undefined) {
+      throw new Error(
+        `missing from_data for ${Typed.pathToString(targetType.path)}`
+      )
+    }
+
+    const sourceSpan = expr.as.sourceSpan
+
+    return {
+      applied: {
+        _tag: "Call",
+        fn: {
+          _tag: "Raw",
+          resolved: {
+            _tag: "Typed",
+            type: {
+              _tag: "FuncType",
+              args: [
+                {
+                  _tag: "DataType",
+                  path: Untyped.makePath(Source.DummySpan(), "Data"),
+                  properties: {},
+                  variants: {}
+                }
+              ],
+              returns: targetType
+            }
+          },
+          ir: fromData.ir,
+          dependencies: fromData.deps
+        },
+        args: {
+          _tag: "Group",
+          open: {
+            _tag: "Symbol",
+            value: "(",
+            sourceSpan
+          },
+          fields: [left.applied],
+          separators: [],
+          close: {
+            _tag: "Symbol",
+            value: ")",
+            sourceSpan
+          }
+        },
+        resolved: expr.resolved
+      },
+      dependencies: uniquePaths(...left.dependencies, ...fromData.deps)
     }
   }
 
@@ -942,52 +989,6 @@ class Applier {
         throw new Error(
           `component ${path.component} not available in ${dataType._tag}`
         )
-      }
-
-      if (path.component == "from_data") {
-        if (Object.keys(dataType.variants).length == 0) {
-          return {
-            _tag: "Raw",
-            ir: "unListData",
-            dependencies: [],
-            resolved: {
-              _tag: "Typed",
-              type: {
-                _tag: "FuncType",
-                args: [
-                  {
-                    _tag: "DataType",
-                    path: Untyped.makePath(Source.DummySpan(), "Data"),
-                    properties: {},
-                    variants: {}
-                  }
-                ],
-                returns: dataType
-              }
-            }
-          }
-        } else {
-          return {
-            _tag: "Raw",
-            ir: "unConstrData",
-            dependencies: [],
-            resolved: {
-              _tag: "Typed",
-              type: {
-                _tag: "FuncType",
-                args: [
-                  {
-                    _tag: "DataType",
-                    path: Untyped.makePath(Source.DummySpan(), "Data"),
-                    properties: {},
-                    variants: {}
-                  }
-                ],
-                returns: dataType
-              }
-            }
-          }
-        }
       }
 
       const prop = dataType.properties[path.component]
@@ -2118,6 +2119,25 @@ export function generateIR(expr: Expression): IR.Expression {
 }
 
 export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
+  const makeFromDataCall = (
+    type: Typed.DataType,
+    value: IR.Expression
+  ): IR.Expression => {
+    const fromData = type.from_data
+
+    if (fromData === undefined) {
+      throw new Error(`missing from_data for ${Typed.pathToString(type.path)}`)
+    }
+
+    return IR.makeCall(
+      IR.parseExpression({
+        name: "from-data-ir",
+        content: fromData.ir
+      }),
+      [value]
+    )
+  }
+
   const body = entryPoint.definitions.reduce((expr, definition) => {
     const dependencies = definition.dependencies ?? []
 
@@ -2149,12 +2169,7 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
     }
 
     if (pathToString(redeemerArg.type.path) != "Data") {
-      result = IR.makeCall(
-        IR.makeReference(
-          pathToString(redeemerArg.type.path) + "::" + ":from_data"
-        ),
-        [redeemerExpr]
-      )
+      result = makeFromDataCall(redeemerArg.type, redeemerExpr)
     }
 
     // wrap with a call with the redeemer arg (headList(tailList(sndPair(unConstrData(scriptContextData)))))
@@ -2169,10 +2184,7 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
       result,
       body.args.fields.map((f) => {
         if (f.type._tag == "DataType" && pathToString(f.type.path) != "Data") {
-          return IR.makeCall(
-            IR.makeReference(pathToString(f.type.path) + "::" + ":from_data"),
-            [IR.makeReference(f.name.value)]
-          )
+          return makeFromDataCall(f.type, IR.makeReference(f.name.value))
         } else {
           return IR.makeReference(f.name.value)
         }

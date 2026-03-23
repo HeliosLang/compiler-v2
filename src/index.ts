@@ -73,11 +73,15 @@ function makeGlobals(): Applied.Globals {
   const makePath = (name: string): Typed.Path =>
     Untyped.makePath(internalSpan, name)
 
-  const makeDataType = (name: string): Typed.DataType => ({
+  const makeDataType = (
+    name: string,
+    from_data?: Typed.DataType["from_data"]
+  ): Typed.DataType => ({
     _tag: "DataType",
     path: makePath(name),
     properties: {},
-    variants: {}
+    variants: {},
+    ...(from_data === undefined ? {} : { from_data })
   })
 
   const makeFunc = (
@@ -96,17 +100,42 @@ function makeGlobals(): Applied.Globals {
     }
   })
 
-  const boolType = makeDataType("Bool")
-  const intType = makeDataType("Int")
-  const byteArrayType = makeDataType("ByteArray")
-  const realType = makeDataType("Real")
-  const stringType = makeDataType("String")
+  const boolFromData = {
+    ir: "(data) -> {equalsInteger(fstPair(unConstrData(data)),1)}",
+    deps: []
+  } satisfies NonNullable<Typed.DataType["from_data"]>
+  const intFromData = {
+    ir: "unIData",
+    deps: []
+  } satisfies NonNullable<Typed.DataType["from_data"]>
+  const byteArrayFromData = {
+    ir: "unBData",
+    deps: []
+  } satisfies NonNullable<Typed.DataType["from_data"]>
+  const stringFromData = {
+    ir: "(data) -> {decodeUtf8(unBData(data))}",
+    deps: []
+  } satisfies NonNullable<Typed.DataType["from_data"]>
+  const realFromData = {
+    ir: "unIData",
+    deps: []
+  } satisfies NonNullable<Typed.DataType["from_data"]>
+  const dataFromData = {
+    ir: "(data) -> {data}",
+    deps: []
+  } satisfies NonNullable<Typed.DataType["from_data"]>
+
+  const boolType = makeDataType("Bool", boolFromData)
+  const intType = makeDataType("Int", intFromData)
+  const byteArrayType = makeDataType("ByteArray", byteArrayFromData)
+  const realType = makeDataType("Real", realFromData)
+  const stringType = makeDataType("String", stringFromData)
   const unitType = makeDataType("Unit")
   const errorUnitType = {
     ...unitType,
     isError: true
   }
-  const dataType = makeDataType("Data")
+  const dataType = makeDataType("Data", dataFromData)
   const bls12_381_G1ElementType = makeDataType("Bls12_381_G1Element")
   const bls12_381_G2ElementType = makeDataType("Bls12_381_G2Element")
   const bls12_381_MlResultType = makeDataType("Bls12_381_MlResult")
@@ -271,54 +300,12 @@ function makeGlobals(): Applied.Globals {
     Bool: {
       symbolValue: boolType
     },
-    "Bool:::from_data": {
-      ...makeFunc("Bool:::from_data", [dataType], boolType),
-      implementation: {
-        ir: "(data) -> {equalsInteger(sndPair(unConstrData(data)),1)}",
-        deps: []
-      }
-    },
     Int: { symbolValue: intType },
-    "Int:::from_data": {
-      ...makeFunc("Int:::from_data", [dataType], intType),
-      implementation: {
-        ir: "unIData",
-        deps: []
-      }
-    },
     ByteArray: { symbolValue: byteArrayType },
-    "ByteArray:::from_data": {
-      ...makeFunc("ByteArray:::from_data", [dataType], byteArrayType),
-      implementation: {
-        ir: "unBData",
-        deps: []
-      }
-    },
     String: { symbolValue: stringType },
-    "String:::from_data": {
-      ...makeFunc("String:::from_data", [dataType], stringType),
-      implementation: {
-        ir: "(data) -> {decodeUtf8(unBData(data))}",
-        deps: []
-      }
-    },
     Real: { symbolValue: realType },
-    "Real:::from_data": {
-      ...makeFunc("Real:::from_data", [dataType], realType),
-      implementation: {
-        ir: "unIData",
-        deps: []
-      }
-    },
     Unit: { symbolValue: unitType },
     Data: { symbolValue: dataType },
-    "Data:::from_data": {
-      ...makeFunc("Data:::from_data", [dataType], dataType),
-      implementation: {
-        ir: "(data) -> {data}",
-        deps: []
-      }
-    },
     error: {
       ...makeFunc("error", [], errorUnitType),
       implementation: {

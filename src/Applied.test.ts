@@ -9,7 +9,15 @@ const dataType = (name: string): Typed.DataType => ({
   _tag: "DataType",
   path: Untyped.makePath(Source.DummySpan(), name),
   properties: {},
-  variants: {}
+  variants: {},
+  ...(name == "Int"
+    ? {
+        from_data: {
+          ir: "unIData",
+          deps: []
+        }
+      }
+    : {})
 })
 
 const addIntegerType: Typed.FuncType = {
@@ -21,21 +29,6 @@ const addIntegerType: Typed.FuncType = {
 const globals: Applied.Globals = {
   Bool: { symbolValue: dataType("Bool") },
   Int: { symbolValue: dataType("Int") },
-  "Int:::from_data": {
-    symbolValue: {
-      _tag: "Typed",
-      path: Untyped.makePath(Source.DummySpan(), "Int:::from_data"),
-      type: {
-        _tag: "FuncType",
-        args: [dataType("Data")],
-        returns: dataType("Int")
-      }
-    },
-    implementation: {
-      ir: "unIData",
-      deps: []
-    }
-  },
   ByteArray: { symbolValue: dataType("ByteArray") },
   String: { symbolValue: dataType("String") },
   Real: { symbolValue: dataType("Real") },

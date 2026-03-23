@@ -66,6 +66,8 @@ export interface DataType {
 
   readonly variants: Record<string, VariantImplementation>
 
+  readonly from_data?: { ir: string; deps: Path[] } | undefined
+
   readonly isError?: boolean | undefined
 }
 
@@ -223,6 +225,12 @@ export interface Apply<T extends Type | Typed = Type | Typed> extends Omit<
   readonly gtype: Expression
   readonly args: Token.Group<"[", Expression>
   readonly resolved: T
+}
+
+export interface As extends Omit<Untyped.As, "left" | "right"> {
+  readonly left: InstanceExpression
+  readonly right: TypeExpression
+  readonly resolved: Typed<DataType>
 }
 
 function isTypeApply(apply: Apply): apply is Apply<Type> {
@@ -429,6 +437,7 @@ export interface UnaryOp extends Omit<Untyped.UnaryOp, "right"> {
 
 export type Expression =
   | Apply
+  | As
   | BinaryOp
   | Call
   | Chain
@@ -452,6 +461,7 @@ export type Expression =
 
 export type InstanceExpression =
   | Apply<Typed>
+  | As
   | BinaryOp
   | Call
   | Chain
@@ -491,6 +501,8 @@ export function sourceSpan(node: Path | Expression): Source.Span {
         node.args.open.sourceSpan,
         node.args.close.sourceSpan
       )
+    case "As":
+      return node.as.sourceSpan
     case "BinaryOp":
       return node.op.sourceSpan
     case "Call":
@@ -992,6 +1004,8 @@ class Resolver {
     switch (expr._tag) {
       case "Apply":
         return this.resolveApply(expr, scope)
+      case "As":
+        return this.resolveAs(expr, scope)
       case "BinaryOp":
         return this.resolveBinaryOp(expr, scope)
       case "Call":
@@ -1134,6 +1148,56 @@ class Resolver {
     }
   }
 
+  private resolveAs(untyped: Untyped.As, scope: Scope): As {
+    const left = this.resolveInstanceExpression(untyped.left, scope)
+    const right = this.resolveTypeExpression(untyped.right, scope)
+
+    if (left.resolved.type._tag != "DataType") {
+      throw new CompilerError.Type(
+        Untyped.sourceSpan(untyped.left),
+        "Expected data-typed value on lhs of as"
+      )
+    }
+
+    if (pathToString(left.resolved.type.path) != "Data") {
+      throw new CompilerError.Type(
+        Untyped.sourceSpan(untyped.left),
+        "Only Data values can be converted using as"
+      )
+    }
+
+    if (right.resolved._tag != "DataType") {
+      throw new CompilerError.Type(
+        Untyped.sourceSpan(untyped.right),
+        "Expected data type on rhs of as"
+      )
+    }
+
+    if (pathToString(right.resolved.path) == "Data") {
+      throw new CompilerError.Type(
+        Untyped.sourceSpan(untyped.right),
+        "as does not support Data on the rhs"
+      )
+    }
+
+    if (right.resolved.from_data === undefined) {
+      throw new CompilerError.Type(
+        Untyped.sourceSpan(untyped.right),
+        `Missing from_data for ${pathToString(right.resolved.path)}`
+      )
+    }
+
+    return {
+      ...untyped,
+      left,
+      right,
+      resolved: {
+        _tag: "Typed",
+        type: right.resolved
+      }
+    }
+  }
+
   private resolveEnum(untyped: Untyped.Enum, scope: Scope): Enum {
     const variants = Object.fromEntries(
       untyped.variants.map((variant, i) => {
@@ -1157,16 +1221,20 @@ class Resolver {
             )
           }
 
-          const fromDataPath: Path = {
-            ...resolved.path,
-            component: "from_data"
+          const fromData = resolved.from_data
+
+          if (fromData === undefined) {
+            throw new CompilerError.Type(
+              Untyped.sourceSpan(field.type.type),
+              `Missing from_data for ${pathToString(resolved.path)}`
+            )
           }
 
           properties[field.name.value] = {
             symbolValue: resolved,
             implementation: {
-              ir: `(self) -> {${pathToString(fromDataPath)}(headList(${ir}))}`,
-              deps: [fromDataPath]
+              ir: `(self) -> {${fromData.ir}(headList(${ir}))}`,
+              deps: fromData.deps
             }
           }
 
@@ -1205,7 +1273,11 @@ class Resolver {
           separators: []
         },
         properties: {},
-        variants
+        variants,
+        from_data: {
+          ir: "unConstrData",
+          deps: []
+        }
       }
     }
   }
@@ -2283,16 +2355,20 @@ class Resolver {
         )
       }
 
-      const fromDataPath: Path = {
-        ...resolved.path,
-        component: "from_data"
+      const fromData = resolved.from_data
+
+      if (fromData === undefined) {
+        throw new CompilerError.Type(
+          Untyped.sourceSpan(field.type.type),
+          `Missing from_data for ${pathToString(resolved.path)}`
+        )
       }
 
       properties[field.name.value] = {
         symbolValue: resolved,
         implementation: {
-          ir: `(self) -> {${pathToString(fromDataPath)}(headList(${ir}))}`,
-          deps: [fromDataPath]
+          ir: `(self) -> {(${fromData.ir})(headList(${ir}))}`,
+          deps: fromData.deps
         }
       }
 
@@ -2309,7 +2385,11 @@ class Resolver {
           separators: []
         },
         properties,
-        variants: {}
+        variants: {},
+        from_data: {
+          ir: "unListData",
+          deps: []
+        }
       }
     }
   }
@@ -2376,6 +2456,7 @@ class Resolver {
           Untyped.sourceSpan(untyped),
           "Expected Instance, got Type"
         )
+      case "As":
       case "BinaryOp":
       case "Call":
       case "Chain":
@@ -2453,6 +2534,7 @@ class Resolver {
         }
       case "FuncDecl":
         return expr
+      case "As":
       case "BinaryOp":
       case "Call":
       case "Chain":

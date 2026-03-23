@@ -150,6 +150,13 @@ export interface Apply {
   readonly args: Token.Group<"[", Expression>
 }
 
+export interface As {
+  readonly _tag: "As"
+  readonly left: Expression
+  readonly as: Token.Word<"as">
+  readonly right: Expression
+}
+
 // TODO: other common binary operators
 export interface BinaryOp {
   readonly _tag: "BinaryOp"
@@ -401,6 +408,7 @@ export interface UnaryOp {
  */
 export type Expression =
   | Apply
+  | As
   | BinaryOp
   | Call
   | Chain
@@ -432,6 +440,8 @@ export function sourceSpan(node: Path | Expression): Source.Span {
         node.args.open.sourceSpan,
         node.args.close.sourceSpan
       )
+    case "As":
+      return node.as.sourceSpan
     case "BinaryOp":
       return node.op.sourceSpan
     case "Call":
@@ -680,7 +690,23 @@ class Parser {
       }
     }
 
-    return this.parsePostfix(r)
+    return this.parseAs(r)
+  }
+
+  private parseAs(r: Reader): Expression {
+    let left = this.parsePostfix(r)
+    let m
+
+    while ((m = r.matches(word("as")))) {
+      left = {
+        _tag: "As",
+        left,
+        as: m,
+        right: this.parsePostfix(r)
+      }
+    }
+
+    return left
   }
 
   private parsePostfix(r: Reader): Expression {
@@ -1106,6 +1132,7 @@ class Parser {
         "=",
         "==",
         "+",
+        "as",
         "&&",
         ":",
         "|"
@@ -1388,7 +1415,7 @@ class Parser {
   }
 
   private parseStatements(r: Reader): Statement[] {
-    r = r.insertSemicolons(["=", "==", "+", "&&", ":", "|", "->"])
+    r = r.insertSemicolons(["=", "==", "+", "as", "&&", ":", "|", "->"])
 
     let m
 

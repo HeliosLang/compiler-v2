@@ -109,4 +109,38 @@ export main = (): Int -> {
 
     expect(script.version).toBe(3)
   })
+
+  it("casts Data to primitive types using as", () => {
+    const entryPoints = compile(
+      [
+        {
+          name: "cast.hl",
+          content: `module cast;
+export main = (value: Data): Int -> addInteger(value as Int, 1)`
+        }
+      ],
+      {
+        compileFunctions: true
+      }
+    )
+
+    const main = entryPoints["cast::main"]
+
+    if (main === undefined) {
+      throw new Error("expected cast::main entrypoint")
+    }
+
+    const result = runSync(
+      Uplc.Script.eval(main, [{ data: { int: 0n } }, { data: { int: 2n } }])
+    )
+
+    if (result.value._tag == "Left") {
+      throw new Error(result.value.left.error)
+    }
+
+    expect(result.value.right).toEqual({
+      _tag: "Const",
+      value: 3n
+    })
+  })
 })

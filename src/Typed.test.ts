@@ -18,7 +18,11 @@ const source = (name: string, content: string) => ({
 const makePath = (path: string): Path =>
   Untyped.makePath(Source.DummySpan(), path)
 
-const dataType = (path: string, appliedTypes?: DataType[]): DataType => ({
+const dataType = (
+  path: string,
+  appliedTypes?: DataType[],
+  from_data?: DataType["from_data"]
+): DataType => ({
   _tag: "DataType",
   path:
     appliedTypes === undefined || appliedTypes.length == 0
@@ -28,7 +32,8 @@ const dataType = (path: string, appliedTypes?: DataType[]): DataType => ({
           appliedTypes
         },
   properties: {},
-  variants: {}
+  variants: {},
+  ...(from_data === undefined ? {} : { from_data })
 })
 
 const listGeneric: GenericValue = {
@@ -82,11 +87,26 @@ const pipeIdGeneric: GenericValue = {
 }
 
 const builtins: Scope = {
-  Bool: dataType("Bool"),
-  Int: dataType("Int"),
-  ByteArray: dataType("ByteArray"),
-  String: dataType("String"),
-  Real: dataType("Real"),
+  Bool: dataType("Bool", undefined, {
+    ir: "(data) -> {equalsInteger(sndPair(unConstrData(data)),1)}",
+    deps: []
+  }),
+  Int: dataType("Int", undefined, {
+    ir: "unIData",
+    deps: []
+  }),
+  ByteArray: dataType("ByteArray", undefined, {
+    ir: "unBData",
+    deps: []
+  }),
+  String: dataType("String", undefined, {
+    ir: "(data) -> {decodeUtf8(unBData(data))}",
+    deps: []
+  }),
+  Real: dataType("Real", undefined, {
+    ir: "unIData",
+    deps: []
+  }),
   List: listGeneric,
   Map: mapGeneric,
   headList: headListGeneric,
@@ -286,6 +306,66 @@ describe("Typed.parseScripts", () => {
         builtins
       )
     ).toThrow(/Unsupported equality type Real/)
+  })
+
+  it("resolves Data casts using datatype from_data", () => {
+    const scripts = parseScripts(
+      [
+        source(
+          "cast.hl",
+          `module cast; value: Data; export one = value as Int`
+        )
+      ],
+      {
+        ...builtins,
+        Data: dataType("Data", undefined, {
+          ir: "(data) -> {data}",
+          deps: []
+        })
+      }
+    )
+
+    const cast = scripts["cast"]
+    if (cast === undefined) {
+      throw new Error("expected script 'cast'")
+    }
+
+    const one = cast.resolved.members["one"]
+    if (one?._tag !== "Typed" || one.type._tag !== "DataType") {
+      throw new Error("expected 'one' to be a Typed DataType")
+    }
+
+    expect(pathToString(one.type.path)).toBe("Int")
+  })
+
+  it("throws when rhs of as is Data", () => {
+    expect(() =>
+      parseScripts(
+        [source("cast-data.hl", `module castData; value: Data; export bad = value as Data`)],
+        {
+          ...builtins,
+          Data: dataType("Data", undefined, {
+            ir: "(data) -> {data}",
+            deps: []
+          })
+        }
+      )
+    ).toThrow(/does not support Data on the rhs/)
+  })
+
+  it("throws when rhs datatype is missing from_data", () => {
+    expect(() =>
+      parseScripts(
+        [source("cast-list.hl", `module castList; value: Data; export bad = value as List[Bool]`)],
+        {
+          ...builtins,
+          Data: dataType("Data", undefined, {
+            ir: "(data) -> {data}",
+            deps: []
+          })
+        }
+      )
+    ).toThrow(/Missing from_data for List\[Bool\]/)
   })
 
   it("lowers pipes into inferred generic calls", () => {
