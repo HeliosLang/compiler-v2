@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test"
+import { Effect, Schema } from "effect"
+import { Ledger, Network, ScriptContext, Uplc } from "@helios-lang/effect/Cardano"
 import { compile } from "../src/index.js"
 
 const utils = `module ScriptContext
@@ -240,26 +242,288 @@ tokens_contain = (map: List[Pair[Data, Data]], token_name: Data): Bool -> {
     }
 }`
 
+function compileAnchorScript(): Uplc.Script.Script<3> {
+  const entryPoints = compile(
+    [
+      {
+        name: "anchor.hl",
+        content: src
+      },
+      {
+        name: "ScriptContext.hl",
+        content: utils
+      }
+    ],
+    {
+      positionalParams: ["anchor::SEED"]
+    }
+  )
+
+  const main = entryPoints["anchor::main"]
+
+  if (main === undefined) {
+    throw new Error("expected anchor::main entrypoint")
+  }
+
+  return main
+}
+
+function evalScript(
+  script: Uplc.Script.Script<3>,
+  args: Uplc.Value.Value[]
+): Uplc.Cek.Value {
+  const result = evalScriptResult(script, args)
+
+  if (result.value._tag == "Left") {
+    throw new Error(result.value.left.error)
+  }
+
+  return result.value.right
+}
+
+function evalScriptResult(
+  script: Uplc.Script.Script<3>,
+  args: Uplc.Value.Value[]
+) {
+  return Effect.runSync(Uplc.Script.eval(script, args))
+}
+
 describe("anchor", () => {
   it("compiles the embedded validator source", () => {
-    const entryPoints = compile(
-      [
-        {
-          name: "anchor.hl",
-          content: src
-        },
-        {
-            name: "ScriptContext.hl",
-            content: utils
-        }
-      ],
-      {
-        positionalParams: ["anchor::SEED"]
-      }
+    expect(compileAnchorScript()).toBeDefined()
+  })
+
+  it("spends the parametrized seed when redeemer tag is 0", () => {
+    const script = compileAnchorScript()
+    const txHash = Schema.decodeSync(Ledger.TxHash.TxHash)("11".repeat(32))
+    const seedRef = Ledger.UTxORef.make(txHash, 0)
+    const seedRefData = Schema.encodeSync(Ledger.UTxORef.FromUplcDataV3)(seedRef)
+    const pkh = Schema.decodeSync(Ledger.PubKeyHash.PubKeyHash)("22".repeat(28))
+    const address = Ledger.Address.make(
+      false,
+      Ledger.Credential.makePubKey(pkh)
     )
 
-    expect(entryPoints["anchor::main"]).toBeDefined()
+    const tx: Ledger.Tx.Tx = {
+      body: {
+        inputs: [
+          {
+            ref: seedRef,
+            output: {
+              address,
+              assets: {
+                "": 1_000_000n
+              }
+            }
+          }
+        ],
+        outputs: [],
+        fee: 0n,
+        dcerts: [],
+        withdrawals: [],
+        minted: {},
+        collateral: [],
+        signers: [],
+        totalCollateral: 0n,
+        refInputs: []
+      },
+      witnesses: {
+        signatures: [],
+        datums: [],
+        redeemers: [
+          {
+            _tag: "Spending",
+            inputIndex: 0,
+            data: Uplc.Data.makeConstrData(0, []),
+            cost: {
+              cpu: 0n,
+              mem: 0n
+            }
+          }
+        ],
+        nativeScripts: [],
+        v1Scripts: [],
+        v2Scripts: [],
+        v3Scripts: [],
+        v2RefScripts: [],
+        v3RefScripts: []
+      },
+      isValid: true
+    }
 
-    console.log(entryPoints["anchor::main"].root.length)
+    const scriptContextArgs = Effect.runSync(
+      ScriptContext.makeArgs(3, tx, 0).pipe(
+        Effect.provideService(Network.IsMainnet, false),
+        Effect.provideService(Network.Params.params, Network.Params.testParams)
+      )
+    )
+
+    expect(scriptContextArgs).toHaveLength(1)
+
+    const value = evalScript(script, [{ data: seedRefData }, scriptContextArgs[0]])
+
+    expect(value).toEqual({
+      _tag: "Const",
+      value: null
+    })
+  })
+
+  it("fails validation when the parametrized seed isn't spent", () => {
+    const script = compileAnchorScript()
+    const txHash = Schema.decodeSync(Ledger.TxHash.TxHash)("11".repeat(32))
+    const seedRef = Ledger.UTxORef.make(txHash, 0)
+    const otherRef = Ledger.UTxORef.make(txHash, 1)
+    const seedRefData = Schema.encodeSync(Ledger.UTxORef.FromUplcDataV3)(seedRef)
+    const pkh = Schema.decodeSync(Ledger.PubKeyHash.PubKeyHash)("22".repeat(28))
+    const address = Ledger.Address.make(
+      false,
+      Ledger.Credential.makePubKey(pkh)
+    )
+
+    const tx: Ledger.Tx.Tx = {
+      body: {
+        inputs: [
+          {
+            ref: otherRef,
+            output: {
+              address,
+              assets: {
+                "": 1_000_000n
+              }
+            }
+          }
+        ],
+        outputs: [],
+        fee: 0n,
+        dcerts: [],
+        withdrawals: [],
+        minted: {},
+        collateral: [],
+        signers: [],
+        totalCollateral: 0n,
+        refInputs: []
+      },
+      witnesses: {
+        signatures: [],
+        datums: [],
+        redeemers: [
+          {
+            _tag: "Spending",
+            inputIndex: 0,
+            data: Uplc.Data.makeConstrData(0, []),
+            cost: {
+              cpu: 0n,
+              mem: 0n
+            }
+          }
+        ],
+        nativeScripts: [],
+        v1Scripts: [],
+        v2Scripts: [],
+        v3Scripts: [],
+        v2RefScripts: [],
+        v3RefScripts: []
+      },
+      isValid: true
+    }
+
+    const scriptContextArgs = Effect.runSync(
+      ScriptContext.makeArgs(3, tx, 0).pipe(
+        Effect.provideService(Network.IsMainnet, false),
+        Effect.provideService(Network.Params.params, Network.Params.testParams)
+      )
+    )
+
+    expect(scriptContextArgs).toHaveLength(1)
+
+    const result = evalScriptResult(script, [
+      { data: seedRefData },
+      scriptContextArgs[0]
+    ])
+
+    expect(result.value._tag).toBe("Left")
+  })
+
+  it("keeps the state NFT at the script address when redeemer tag is 1", () => {
+    const script = compileAnchorScript()
+    const txHash = Schema.decodeSync(Ledger.TxHash.TxHash)("11".repeat(32))
+    const seedRef = Ledger.UTxORef.make(txHash, 0)
+    const seedRefData = Schema.encodeSync(Ledger.UTxORef.FromUplcDataV3)(seedRef)
+    const currentRef = Schema.encodeSync(Ledger.UTxORef.FromUplcDataV3)(
+      Ledger.UTxORef.make(txHash, 1)
+    )
+    const signer = Schema.decodeSync(Ledger.PubKeyHash.PubKeyHash)("22".repeat(28))
+    const appliedScript = Effect.runSync(
+      Uplc.Script.apply(script, [{ data: seedRefData }])
+    )
+    const scriptHash = Uplc.Script.hash(appliedScript)
+    const scriptHashData = Uplc.Data.makeByteArrayData(scriptHash)
+    const noneData = Uplc.Data.makeConstrData(1, [])
+    const stateWitness = Uplc.Data.makeConstrData(0, [
+      Uplc.Data.makeByteArrayData(signer)
+    ])
+    const stateDatum = Uplc.Data.makeConstrData(2, [
+      Uplc.Data.makeListData([stateWitness])
+    ])
+    const stateAssets = Uplc.Data.makeMapData([
+      [
+        Uplc.Data.makeByteArrayData(""),
+        Uplc.Data.makeMapData([[Uplc.Data.makeByteArrayData(""), Uplc.Data.makeIntData(1_000_000)]])
+      ],
+      [
+        scriptHashData,
+        Uplc.Data.makeMapData([[Uplc.Data.makeByteArrayData(""), Uplc.Data.makeIntData(1)]])
+      ]
+    ])
+    const stateInput = Uplc.Data.makeConstrData(0, [
+      currentRef,
+      Uplc.Data.makeConstrData(0, [
+        Uplc.Data.makeConstrData(0, [scriptHashData, noneData]),
+        stateAssets,
+        stateDatum
+      ])
+    ])
+    const stateOutput = Uplc.Data.makeConstrData(0, [
+      Uplc.Data.makeConstrData(0, [
+        Uplc.Data.makeConstrData(1, [scriptHashData]),
+        noneData
+      ]),
+      stateAssets,
+      noneData
+    ])
+    const scriptContextData = Uplc.Data.makeConstrData(0, [
+      Uplc.Data.makeConstrData(0, [
+        Uplc.Data.makeListData([stateInput]),
+        Uplc.Data.makeListData([]),
+        Uplc.Data.makeListData([stateOutput]),
+        Uplc.Data.makeIntData(0),
+        Uplc.Data.makeMapData([]),
+        Uplc.Data.makeListData([]),
+        Uplc.Data.makeMapData([]),
+        noneData,
+        Uplc.Data.makeListData([Uplc.Data.makeByteArrayData(signer)]),
+        Uplc.Data.makeMapData([]),
+        Uplc.Data.makeMapData([]),
+        Uplc.Data.makeByteArrayData("33".repeat(32)),
+        Uplc.Data.makeMapData([]),
+        Uplc.Data.makeListData([]),
+        noneData,
+        noneData
+      ]),
+      Uplc.Data.makeConstrData(1, [
+        Uplc.Data.makeIntData(0),
+        Uplc.Data.makeIntData(0),
+        Uplc.Data.makeIntData(0),
+        Uplc.Data.makeIntData(0)
+      ]),
+      Uplc.Data.makeConstrData(1, [currentRef])
+    ])
+
+    const value = evalScript(script, [{ data: seedRefData }, { data: scriptContextData }])
+
+    expect(value).toEqual({
+      _tag: "Const",
+      value: null
+    })
   })
 })
