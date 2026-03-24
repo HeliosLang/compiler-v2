@@ -337,10 +337,17 @@ function makeGlobals(): Applied.Globals {
     Unit: { symbolValue: unitType },
     Data: { symbolValue: dataType },
     error: {
-      ...makeFunc("error", [], errorUnitType),
+      ...makeFunc("error", [stringType], errorUnitType),
       implementation: {
-        ir: "() -> {error()}",
+        ir: "(msg) -> {trace(msg, () -> {error()})()}",
         deps: []
+      }
+    },
+    assert: {
+      ...makeFunc("assert", [boolType, stringType], unitType),
+      implementation: {
+        ir: "(b, msg) -> {ifThenElse(b, () -> {()}, () -> {error(msg)})()}",
+        deps: [makePath("error")]
       }
     },
     Bls12_381_G1Element: { symbolValue: bls12_381_G1ElementType },

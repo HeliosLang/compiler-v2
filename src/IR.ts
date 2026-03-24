@@ -409,14 +409,25 @@ class Parser {
         const args = r.matches(group("("))
 
         if (args === undefined) {
-          throw r.syntaxError("Expected '()' after 'error'")
+          // assume the error method is shadowed
+          return {
+            _tag: "Reference",
+            name: w
+          }
         }
 
         if (args.fields.length != 0) {
-          throw new CompilerError.Syntax(
-            args.open.sourceSpan,
-            "Expected empty argument list for error()"
-          )
+          return {
+            _tag: "Call",
+            fn: {
+              _tag: "Reference",
+              name: w
+            },
+            args: {
+              ...args,
+              fields: args.fields.map(f => this.parseExpression(f))
+            }
+          }
         }
 
         return {

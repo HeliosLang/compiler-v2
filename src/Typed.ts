@@ -1425,6 +1425,7 @@ class Resolver {
     if (args.length != fnType.args.length) {
       throw new CompilerError.Type(
         Untyped.sourceSpan(untyped),
+        fn.resolved.path ? `'${pathToString(fn.resolved.path)}' expects ${fnType.args.length} argument(s)`  :
         `Expected ${fnType.args.length} arguments`
       )
     }
@@ -2295,6 +2296,7 @@ class Resolver {
     let current: SymbolValue | undefined = scope[first.value]
 
     if (current === undefined) {
+      console.log(Object.keys(scope))
       throw new CompilerError.Reference(
         first.sourceSpan,
         `'${first.value}' not found`

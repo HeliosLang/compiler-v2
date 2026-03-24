@@ -62,91 +62,80 @@ export main = (_redeemer: Data) -> {
 
     redeemer_pair = unConstrData(ctx.redeemer)
     redeemer_tag = fstPair(redeemer_pair)
+    ptr_fields = sndPair(redeemer_pair)
 
     if (redeemer_tag == 0) {
-        if (spends_seed(tx.inputs)) {
-            ()
-        } else {
-            error()
-        }
+      seed_ptr = unIData(headList(ptr_fields))
+      input = get(tx.inputs, seed_ptr, 0) as ScriptContext::UTxO
+
+      assert(input.ref == SEED, "seed not spent")
     } else {
-        // index of the state input/ref-input
-        ptr_fields = sndPair(redeemer_pair)
-        input_ptr = unIData(headList(ptr_fields))
-        witness_ptr = unIData(headList(tailList(ptr_fields)))
-        signer_ptr = unIData(headList(tailList(tailList(ptr_fields))))
+      // index of the state input/ref-input  
+      input_ptr = unIData(headList(ptr_fields))
+      witness_ptr = unIData(headList(tailList(ptr_fields)))
+      signer_ptr = unIData(headList(tailList(tailList(ptr_fields))))
 
-        own_hash = get_own_hash(
-            ctx.purpose,
-            tx
-        )
+      own_hash = get_own_hash(ctx.purpose, tx)
 
-        inputs = if (redeemer_tag == 1) {
-            // state token must be returned to this validator
-            output_ptr = unIData(headList(tailList(tailList(tailList(ptr_fields)))))
-            output = get(tx.outputs, output_ptr, 0) as ScriptContext::TxOutput
+      if (redeemer_tag == 1) {
+        // state token must be returned to this validator
+        output_ptr = unIData(headList(tailList(tailList(tailList(ptr_fields)))))
+        output_witness_ptr = unIData(headList(tailList(tailList(tailList(tailList(ptr_fields))))))
+        output = get(tx.outputs, output_ptr, 0) as ScriptContext::TxOutput
 
-            if (contains_state_token(output.assets, own_hash)) {
-                if (output.address.spending_cred == constrData(1, mkCons(own_hash, mkNilData(())) )) {
-                    tx.inputs
-                } else {
-                    error()
-                }
-            } else {
-                error()
-            }
-        } else {
-            tx.ref_inputs
-        }
+        assert(contains_state_token(output.assets, own_hash), "output doesn't contain token")
+        assert(output.address.spending_cred == constrData(1, mkCons(own_hash, mkNilData(()))), "output not returned")
 
-        input = get(inputs, input_ptr, 0) as ScriptContext::UTxO
-        input_output = input.output
-        input_assets = input_output.assets
+        witness = validate_input(tx.inputs, input_ptr, own_hash, witness_ptr)
 
-        // make sure the input contains at least one state asset
-        if (contains_state_token(input_assets, own_hash)) {
-            // now get the datum
-            input_datum = unListData(headList(sndPair(unConstrData(input_output.datum))))
+        validate_witness(witness, tx, signer_ptr)
 
-            witness = unConstrData(get(input_datum, witness_ptr, 0))
-            witness_tag = fstPair(witness)
+        // make sure the witness is in the output datum
+        output_witness = get(unListData(headList(sndPair(unConstrData(output.datum)))), output_witness_ptr, 0)
 
-            if (witness_tag == 0) {
-                // signed by PubKeyHash
-                pkh = get(tx.signers, signer_ptr, 0)
+        assert(witness == output_witness, "witness not present in output")
+      } else {
+        witness = validate_input(tx.ref_inputs, input_ptr, own_hash, witness_ptr)
 
-                if (pkh == headList(sndPair(witness))) {
-                    ()
-                } else {
-                    error()
-                }
-            } else {
-                // witnessed by staking credential in withdrawal
-                pair = get_pair(tx.withdrawals, signer_ptr, 0)
-
-                withdrawal_cred = (fstPair(pair) as ScriptContext::RewardAddress).cred
-                withdrawal_hash = headList(sndPair(unConstrData(withdrawal_cred)))
-
-                if (withdrawal_hash == headList(sndPair(witness))) {
-                    ()
-                } else {
-                    error()
-                }
-            }
-        } else {
-            error()
-        }
+        validate_witness(witness, tx, signer_ptr)
+      }
     } 
 }
 
-spends_seed = (inputs: List[Data]): Bool -> {
-    if (nullList(inputs)) {
-        false
-    } else if (headList(sndPair(unConstrData(headList(inputs)))) == SEED) {
-        true
-    } else {
-        spends_seed(tailList(inputs))
-    }
+// returns the input datum
+validate_input = (inputs: List[Data], input_ptr: Int, own_hash: Data, witness_ptr: Int): Data -> {
+  input = get(inputs, input_ptr, 0) as ScriptContext::UTxO
+  input_output = input.output
+  input_assets = input_output.assets
+
+  // make sure the input contains at least one state asset
+  assert(contains_state_token(input_assets, own_hash), "input doesn't contain token")
+
+  // now get the datum
+  input_datum = unListData(headList(sndPair(unConstrData(input_output.datum))))
+
+  get(input_datum, witness_ptr, 0)
+}
+
+validate_witness = (witness: Data, tx: ScriptContext::Tx, signer_ptr: Int): () -> {
+  witness_pair = unConstrData(witness)
+  witness_tag = fstPair(witness_pair)
+  witness_hash = headList(sndPair(witness_pair))
+
+  if (witness_tag == 0) {
+    // signed by PubKeyHash
+    pkh = get(tx.signers, signer_ptr, 0)
+
+    assert(pkh == witness_hash, "unexpected pkh witness")
+  } else {
+    // witnessed by staking credential in withdrawal
+    pair = get_pair(tx.withdrawals, signer_ptr, 0)
+
+    withdrawal_cred = (fstPair(pair) as ScriptContext::RewardAddress).cred
+    withdrawal_hash = headList(sndPair(unConstrData(withdrawal_cred)))
+
+    assert(withdrawal_hash == witness_hash, "unexpected withdrawal cred")
+  }
 }
 
 get_own_hash = (purpose: Data, tx: ScriptContext::Tx): Data -> {
@@ -160,7 +149,7 @@ get_own_hash = (purpose: Data, tx: ScriptContext::Tx): Data -> {
 
         // can never mint/burn the state token
         if (contains_state_token(tx.minted, policy)) {
-            error()
+            error("can't mint token")
         } else {
             policy
         }
@@ -188,7 +177,7 @@ get_own_hash = (purpose: Data, tx: ScriptContext::Tx): Data -> {
         // voting
         headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(purpose_fields))))))))))
     } else {
-        error()
+        error("unsupported purpose")
     }
 }
 
@@ -293,6 +282,19 @@ function evalScriptResult(
   return Effect.runSync(Uplc.Script.eval(script, args))
 }
 
+function expectEvalFailureMessage(
+  result: ReturnType<typeof evalScriptResult>,
+  pattern: RegExp
+) {
+  expect(result.value._tag).toBe("Left")
+
+  if (result.value._tag != "Left") {
+    throw new Error("expected script evaluation to fail")
+  }
+
+  expect(result.value.left.error).toMatch(pattern)
+}
+
 function makeScriptContextArgs(tx: Ledger.Tx.Tx, redeemerIndex: number) {
   return Effect.runSync(
     ScriptContext.makeArgs(3, tx, redeemerIndex).pipe(
@@ -368,7 +370,10 @@ function makeRedeemerTag2Setup(script: Uplc.Script.Script<3>) {
 
 describe("anchor", () => {
   it("compiles the embedded validator source", () => {
-    expect(compileAnchorScript()).toBeDefined()
+    const script = compileAnchorScript()
+    expect(script).toBeDefined()
+
+    console.log("Anchor validator size:", script.root.length)
   })
 
   it("spends the parametrized seed when redeemer tag is 0", () => {
@@ -412,7 +417,7 @@ describe("anchor", () => {
           {
             _tag: "Spending",
             inputIndex: 0,
-            data: Uplc.Data.makeConstrData(0, []),
+            data: Uplc.Data.makeConstrData(0, [Uplc.Data.makeIntData(0)]),
             cost: {
               cpu: 0n,
               mem: 0n
@@ -488,7 +493,7 @@ describe("anchor", () => {
           {
             _tag: "Spending",
             inputIndex: 0,
-            data: Uplc.Data.makeConstrData(0, []),
+            data: Uplc.Data.makeConstrData(0, [Uplc.Data.makeIntData(0)]),
             cost: {
               cpu: 0n,
               mem: 0n
@@ -519,7 +524,7 @@ describe("anchor", () => {
       scriptContextArgs[0]
     ])
 
-    expect(result.value._tag).toBe("Left")
+    expectEvalFailureMessage(result, /seed not spent/)
   })
 
   it("keeps the state NFT at the script address when redeemer tag is 1 using ScriptContext.makeArgs()", () => {
@@ -549,7 +554,8 @@ describe("anchor", () => {
         outputs: [
           {
             address: scriptAddress,
-            assets: stateAssets
+            assets: stateAssets,
+            datum: stateDatum
           }
         ],
         fee: 0n,
@@ -569,6 +575,7 @@ describe("anchor", () => {
             _tag: "Spending",
             inputIndex: 0,
             data: Uplc.Data.makeConstrData(1, [
+              Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
@@ -633,7 +640,8 @@ describe("anchor", () => {
         outputs: [
           {
             address: scriptAddress,
-            assets: stateAssets
+            assets: stateAssets,
+            datum: stateDatum
           }
         ],
         fee: 0n,
@@ -653,6 +661,7 @@ describe("anchor", () => {
             _tag: "Spending",
             inputIndex: 0,
             data: Uplc.Data.makeConstrData(1, [
+              Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
@@ -683,7 +692,7 @@ describe("anchor", () => {
       scriptContextArgs[0]
     ])
 
-    expect(result.value._tag).toBe("Left")
+    expectEvalFailureMessage(result, /input doesn't contain token/)
   })
 
   it("fails validation for redeemer tag 1 when the output doesn't return the state NFT", () => {
@@ -737,6 +746,7 @@ describe("anchor", () => {
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0)
             ]),
             cost: {
@@ -764,7 +774,7 @@ describe("anchor", () => {
       scriptContextArgs[0]
     ])
 
-    expect(result.value._tag).toBe("Left")
+    expectEvalFailureMessage(result, /output doesn't contain token/)
   })
 
   it("fails validation for redeemer tag 1 when the pubkey witness doesn't match the signer", () => {
@@ -795,7 +805,8 @@ describe("anchor", () => {
         outputs: [
           {
             address: scriptAddress,
-            assets: stateAssets
+            assets: stateAssets,
+            datum: stateDatum
           }
         ],
         fee: 0n,
@@ -815,6 +826,7 @@ describe("anchor", () => {
             _tag: "Spending",
             inputIndex: 0,
             data: Uplc.Data.makeConstrData(1, [
+              Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
@@ -845,7 +857,7 @@ describe("anchor", () => {
       scriptContextArgs[0]
     ])
 
-    expect(result.value._tag).toBe("Left")
+    expectEvalFailureMessage(result, /unexpected pkh witness/)
   })
 
   it("keeps the state NFT at the script address for redeemer tag 1 with a minting purpose", () => {
@@ -875,7 +887,8 @@ describe("anchor", () => {
         outputs: [
           {
             address: scriptAddress,
-            assets: stateAssets
+            assets: stateAssets,
+            datum: stateDatum
           }
         ],
         fee: 0n,
@@ -897,6 +910,7 @@ describe("anchor", () => {
             _tag: "Minting",
             policyIndex: 0,
             data: Uplc.Data.makeConstrData(1, [
+              Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
@@ -960,6 +974,7 @@ describe("anchor", () => {
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0)
             ]),
             cost: {
@@ -987,7 +1002,7 @@ describe("anchor", () => {
       scriptContextArgs[0]
     ])
 
-    expect(result.value._tag).toBe("Left")
+    expectEvalFailureMessage(result, /can't mint token/)
   })
 
   it("succeeds for redeemer tag 1 with a minting purpose if a non-empty token name is minted", () => {
@@ -1017,7 +1032,8 @@ describe("anchor", () => {
         outputs: [
           {
             address: scriptAddress,
-            assets: stateAssets
+            assets: stateAssets,
+            datum: stateDatum
           }
         ],
         fee: 0n,
@@ -1039,6 +1055,7 @@ describe("anchor", () => {
             _tag: "Minting",
             policyIndex: 0,
             data: Uplc.Data.makeConstrData(1, [
+              Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
@@ -1131,6 +1148,7 @@ describe("anchor", () => {
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
               Uplc.Data.makeIntData(0)
             ]),
             cost: {
@@ -1158,7 +1176,7 @@ describe("anchor", () => {
       scriptContextArgs[0]
     ])
 
-    expect(result.value._tag).toBe("Left")
+    expectEvalFailureMessage(result, /output not returned/)
   })
 
   it("succeeds for redeemer tag 2 when the state NFT is in a reference input and witnessed by a withdrawal validator", () => {
@@ -1328,7 +1346,7 @@ describe("anchor", () => {
       scriptContextArgs[0]
     ])
 
-    expect(result.value._tag).toBe("Left")
+    expectEvalFailureMessage(result, /unexpected withdrawal cred/)
   })
 
   it("fails validation when the purpose tag is unsupported", () => {
@@ -1358,6 +1376,7 @@ describe("anchor", () => {
         Uplc.Data.makeIntData(0),
         Uplc.Data.makeIntData(0),
         Uplc.Data.makeIntData(0),
+        Uplc.Data.makeIntData(0),
         Uplc.Data.makeIntData(0)
       ]),
       Uplc.Data.makeConstrData(5, [])
@@ -1368,6 +1387,6 @@ describe("anchor", () => {
       { data: scriptContextData }
     ])
 
-    expect(result.value._tag).toBe("Left")
+    expectEvalFailureMessage(result, /unsupported purpose/)
   })
 })
