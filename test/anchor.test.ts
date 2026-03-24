@@ -10,6 +10,10 @@ export Address = struct 0{
     staking_cred: Data
 }
 
+export RewardAddress = struct 0 {
+  cred: Data
+}
+
 export TxOutput = struct 0{
     address: Address,
     assets: List[Pair[Data, List[Pair[Data, Data]]]],
@@ -120,7 +124,10 @@ export main = (_redeemer: Data) -> {
                 // witnessed by staking credential in withdrawal
                 pair = get_pair(tx.withdrawals, signer_ptr, 0)
 
-                if (fstPair(pair) == headList(sndPair(witness))) {
+                withdrawal_cred = (fstPair(pair) as ScriptContext::RewardAddress).cred
+                withdrawal_hash = headList(sndPair(unConstrData(withdrawal_cred)))
+
+                if (withdrawal_hash == headList(sndPair(witness))) {
                     ()
                 } else {
                     error()
@@ -323,6 +330,37 @@ function makeRedeemerTag1Setup(script: Uplc.Script.Script<3>) {
     signer,
     scriptHash,
     scriptAddress,
+    stateDatum,
+    stateAssets
+  }
+}
+
+function makeRedeemerTag2Setup(script: Uplc.Script.Script<3>) {
+  const { txHash, seedRefData, scriptHash, scriptAddress } =
+    makeRedeemerTag1Setup(script)
+  const stakingValidatorHash = Schema.decodeSync(
+    Ledger.ValidatorHash.ValidatorHash
+  )("55".repeat(28))
+  const withdrawalAddress = Ledger.RewardAddress.make(
+    false,
+    Ledger.Credential.makeValidator(stakingValidatorHash)
+  )
+  const stateWitness = Uplc.Data.makeConstrData(1, [
+    Uplc.Data.makeByteArrayData(stakingValidatorHash)
+  ])
+  const stateDatum = Uplc.Data.makeListData([stateWitness])
+  const stateAssets = {
+    "": 1_000_000n,
+    [scriptHash]: 1n
+  }
+
+  return {
+    txHash,
+    seedRefData,
+    scriptHash,
+    scriptAddress,
+    stakingValidatorHash,
+    withdrawalAddress,
     stateDatum,
     stateAssets
   }
@@ -648,6 +686,168 @@ describe("anchor", () => {
     expect(result.value._tag).toBe("Left")
   })
 
+  it("fails validation for redeemer tag 1 when the output doesn't return the state NFT", () => {
+    const script = compileAnchorScript()
+    const {
+      txHash,
+      seedRefData,
+      signer,
+      scriptAddress,
+      stateDatum,
+      stateAssets
+    } = makeRedeemerTag1Setup(script)
+
+    const tx: Ledger.Tx.Tx = {
+      body: {
+        inputs: [
+          {
+            ref: Ledger.UTxORef.make(txHash, 1),
+            output: {
+              address: scriptAddress,
+              assets: stateAssets,
+              datum: stateDatum
+            }
+          }
+        ],
+        outputs: [
+          {
+            address: scriptAddress,
+            assets: {
+              "": 1_000_000n
+            }
+          }
+        ],
+        fee: 0n,
+        dcerts: [],
+        withdrawals: [],
+        minted: {},
+        collateral: [],
+        signers: [signer],
+        totalCollateral: 0n,
+        refInputs: []
+      },
+      witnesses: {
+        signatures: [],
+        datums: [],
+        redeemers: [
+          {
+            _tag: "Spending",
+            inputIndex: 0,
+            data: Uplc.Data.makeConstrData(1, [
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0)
+            ]),
+            cost: {
+              cpu: 0n,
+              mem: 0n
+            }
+          }
+        ],
+        nativeScripts: [],
+        v1Scripts: [],
+        v2Scripts: [],
+        v3Scripts: [],
+        v2RefScripts: [],
+        v3RefScripts: []
+      },
+      isValid: true
+    }
+
+    const scriptContextArgs = makeScriptContextArgs(tx, 0)
+
+    expect(scriptContextArgs).toHaveLength(1)
+
+    const result = evalScriptResult(script, [
+      { data: seedRefData },
+      scriptContextArgs[0]
+    ])
+
+    expect(result.value._tag).toBe("Left")
+  })
+
+  it("fails validation for redeemer tag 1 when the pubkey witness doesn't match the signer", () => {
+    const script = compileAnchorScript()
+    const {
+      txHash,
+      seedRefData,
+      scriptAddress,
+      stateDatum,
+      stateAssets
+    } = makeRedeemerTag1Setup(script)
+    const wrongSigner = Schema.decodeSync(Ledger.PubKeyHash.PubKeyHash)(
+      "66".repeat(28)
+    )
+
+    const tx: Ledger.Tx.Tx = {
+      body: {
+        inputs: [
+          {
+            ref: Ledger.UTxORef.make(txHash, 1),
+            output: {
+              address: scriptAddress,
+              assets: stateAssets,
+              datum: stateDatum
+            }
+          }
+        ],
+        outputs: [
+          {
+            address: scriptAddress,
+            assets: stateAssets
+          }
+        ],
+        fee: 0n,
+        dcerts: [],
+        withdrawals: [],
+        minted: {},
+        collateral: [],
+        signers: [wrongSigner],
+        totalCollateral: 0n,
+        refInputs: []
+      },
+      witnesses: {
+        signatures: [],
+        datums: [],
+        redeemers: [
+          {
+            _tag: "Spending",
+            inputIndex: 0,
+            data: Uplc.Data.makeConstrData(1, [
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0)
+            ]),
+            cost: {
+              cpu: 0n,
+              mem: 0n
+            }
+          }
+        ],
+        nativeScripts: [],
+        v1Scripts: [],
+        v2Scripts: [],
+        v3Scripts: [],
+        v2RefScripts: [],
+        v3RefScripts: []
+      },
+      isValid: true
+    }
+
+    const scriptContextArgs = makeScriptContextArgs(tx, 0)
+
+    expect(scriptContextArgs).toHaveLength(1)
+
+    const result = evalScriptResult(script, [
+      { data: seedRefData },
+      scriptContextArgs[0]
+    ])
+
+    expect(result.value._tag).toBe("Left")
+  })
+
   it("keeps the state NFT at the script address for redeemer tag 1 with a minting purpose", () => {
     const script = compileAnchorScript()
     const {
@@ -733,7 +933,407 @@ describe("anchor", () => {
   it("fails validation for redeemer tag 1 with a minting purpose if another state NFT is minted", () => {
     const script = compileAnchorScript()
     const { seedRefData, scriptHash } = makeRedeemerTag1Setup(script)
-    const scriptHashData = Uplc.Data.makeByteArrayData(scriptHash)
+
+    const tx: Ledger.Tx.Tx = {
+      body: {
+        inputs: [],
+        outputs: [],
+        fee: 0n,
+        dcerts: [],
+        withdrawals: [],
+        minted: {
+          [scriptHash]: 1n
+        },
+        collateral: [],
+        signers: [],
+        totalCollateral: 0n,
+        refInputs: []
+      },
+      witnesses: {
+        signatures: [],
+        datums: [],
+        redeemers: [
+          {
+            _tag: "Minting",
+            policyIndex: 0,
+            data: Uplc.Data.makeConstrData(1, [
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0)
+            ]),
+            cost: {
+              cpu: 0n,
+              mem: 0n
+            }
+          }
+        ],
+        nativeScripts: [],
+        v1Scripts: [],
+        v2Scripts: [],
+        v3Scripts: [],
+        v2RefScripts: [],
+        v3RefScripts: []
+      },
+      isValid: true
+    }
+
+    const scriptContextArgs = makeScriptContextArgs(tx, 0)
+
+    expect(scriptContextArgs).toHaveLength(1)
+
+    const result = evalScriptResult(script, [
+      { data: seedRefData },
+      scriptContextArgs[0]
+    ])
+
+    expect(result.value._tag).toBe("Left")
+  })
+
+  it("succeeds for redeemer tag 1 with a minting purpose if a non-empty token name is minted", () => {
+    const script = compileAnchorScript()
+    const {
+      txHash,
+      seedRefData,
+      signer,
+      scriptHash,
+      scriptAddress,
+      stateDatum,
+      stateAssets
+    } = makeRedeemerTag1Setup(script)
+
+    const tx: Ledger.Tx.Tx = {
+      body: {
+        inputs: [
+          {
+            ref: Ledger.UTxORef.make(txHash, 1),
+            output: {
+              address: scriptAddress,
+              assets: stateAssets,
+              datum: stateDatum
+            }
+          }
+        ],
+        outputs: [
+          {
+            address: scriptAddress,
+            assets: stateAssets
+          }
+        ],
+        fee: 0n,
+        dcerts: [],
+        withdrawals: [],
+        minted: {
+          [`${scriptHash}01`]: 1n
+        },
+        collateral: [],
+        signers: [signer],
+        totalCollateral: 0n,
+        refInputs: []
+      },
+      witnesses: {
+        signatures: [],
+        datums: [],
+        redeemers: [
+          {
+            _tag: "Minting",
+            policyIndex: 0,
+            data: Uplc.Data.makeConstrData(1, [
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0)
+            ]),
+            cost: {
+              cpu: 0n,
+              mem: 0n
+            }
+          }
+        ],
+        nativeScripts: [],
+        v1Scripts: [],
+        v2Scripts: [],
+        v3Scripts: [],
+        v2RefScripts: [],
+        v3RefScripts: []
+      },
+      isValid: true
+    }
+
+    const scriptContextArgs = makeScriptContextArgs(tx, 0)
+
+    expect(scriptContextArgs).toHaveLength(1)
+
+    const value = evalScript(script, [{ data: seedRefData }, scriptContextArgs[0]])
+
+    expect(value).toEqual({
+      _tag: "Const",
+      value: null
+    })
+  })
+
+  it("fails validation for redeemer tag 1 with a minting purpose if the output isn't sent to the script address", () => {
+    const script = compileAnchorScript()
+    const {
+      txHash,
+      seedRefData,
+      signer,
+      scriptHash,
+      scriptAddress,
+      stateDatum,
+      stateAssets
+    } = makeRedeemerTag1Setup(script)
+    const wrongPkh = Schema.decodeSync(Ledger.PubKeyHash.PubKeyHash)(
+      "44".repeat(28)
+    )
+    const wrongAddress = Ledger.Address.make(
+      false,
+      Ledger.Credential.makePubKey(wrongPkh)
+    )
+
+    const tx: Ledger.Tx.Tx = {
+      body: {
+        inputs: [
+          {
+            ref: Ledger.UTxORef.make(txHash, 1),
+            output: {
+              address: scriptAddress,
+              assets: stateAssets,
+              datum: stateDatum
+            }
+          }
+        ],
+        outputs: [
+          {
+            address: wrongAddress,
+            assets: stateAssets
+          }
+        ],
+        fee: 0n,
+        dcerts: [],
+        withdrawals: [],
+        minted: {
+          [`${scriptHash}01`]: 1n
+        },
+        collateral: [],
+        signers: [signer],
+        totalCollateral: 0n,
+        refInputs: []
+      },
+      witnesses: {
+        signatures: [],
+        datums: [],
+        redeemers: [
+          {
+            _tag: "Minting",
+            policyIndex: 0,
+            data: Uplc.Data.makeConstrData(1, [
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0)
+            ]),
+            cost: {
+              cpu: 0n,
+              mem: 0n
+            }
+          }
+        ],
+        nativeScripts: [],
+        v1Scripts: [],
+        v2Scripts: [],
+        v3Scripts: [],
+        v2RefScripts: [],
+        v3RefScripts: []
+      },
+      isValid: true
+    }
+
+    const scriptContextArgs = makeScriptContextArgs(tx, 0)
+
+    expect(scriptContextArgs).toHaveLength(1)
+
+    const result = evalScriptResult(script, [
+      { data: seedRefData },
+      scriptContextArgs[0]
+    ])
+
+    expect(result.value._tag).toBe("Left")
+  })
+
+  it("succeeds for redeemer tag 2 when the state NFT is in a reference input and witnessed by a withdrawal validator", () => {
+    const script = compileAnchorScript()
+    const {
+      txHash,
+      seedRefData,
+      scriptHash,
+      scriptAddress
+    } = makeRedeemerTag1Setup(script)
+    const stakingValidatorHash = Schema.decodeSync(
+      Ledger.ValidatorHash.ValidatorHash
+    )("55".repeat(28))
+    const stateWitness = Uplc.Data.makeConstrData(1, [
+      Uplc.Data.makeByteArrayData(stakingValidatorHash)
+    ])
+    const stateDatum = Uplc.Data.makeListData([stateWitness])
+    const stateAssets = {
+      "": 1_000_000n,
+      [scriptHash]: 1n
+    }
+    const withdrawalAddress = Ledger.RewardAddress.make(
+      false,
+      Ledger.Credential.makeValidator(stakingValidatorHash)
+    )
+
+    const tx: Ledger.Tx.Tx = {
+      body: {
+        inputs: [],
+        refInputs: [
+          {
+            ref: Ledger.UTxORef.make(txHash, 2),
+            output: {
+              address: scriptAddress,
+              assets: stateAssets,
+              datum: stateDatum
+            }
+          }
+        ],
+        outputs: [],
+        fee: 0n,
+        dcerts: [],
+        withdrawals: [[withdrawalAddress, 0n]],
+        minted: {
+          [`${scriptHash}01`]: 1n
+        },
+        collateral: [],
+        signers: [],
+        totalCollateral: 0n
+      },
+      witnesses: {
+        signatures: [],
+        datums: [],
+        redeemers: [
+          {
+            _tag: "Minting",
+            policyIndex: 0,
+            data: Uplc.Data.makeConstrData(2, [
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0)
+            ]),
+            cost: {
+              cpu: 0n,
+              mem: 0n
+            }
+          }
+        ],
+        nativeScripts: [],
+        v1Scripts: [],
+        v2Scripts: [],
+        v3Scripts: [],
+        v2RefScripts: [],
+        v3RefScripts: []
+      },
+      isValid: true
+    }
+
+    const scriptContextArgs = makeScriptContextArgs(tx, 0)
+
+    expect(scriptContextArgs).toHaveLength(1)
+
+    const value = evalScript(script, [{ data: seedRefData }, scriptContextArgs[0]])
+
+    expect(value).toEqual({
+      _tag: "Const",
+      value: null
+    })
+  })
+
+  it("fails validation for redeemer tag 2 when the withdrawal validator witness doesn't match the withdrawal", () => {
+    const script = compileAnchorScript()
+    const {
+      txHash,
+      seedRefData,
+      scriptHash,
+      scriptAddress,
+      stateDatum,
+      stateAssets
+    } = makeRedeemerTag2Setup(script)
+    const wrongWithdrawalHash = Schema.decodeSync(Ledger.ValidatorHash.ValidatorHash)(
+      "77".repeat(28)
+    )
+    const wrongWithdrawalAddress = Ledger.RewardAddress.make(
+      false,
+      Ledger.Credential.makeValidator(wrongWithdrawalHash)
+    )
+
+    const tx: Ledger.Tx.Tx = {
+      body: {
+        inputs: [],
+        refInputs: [
+          {
+            ref: Ledger.UTxORef.make(txHash, 2),
+            output: {
+              address: scriptAddress,
+              assets: stateAssets,
+              datum: stateDatum
+            }
+          }
+        ],
+        outputs: [],
+        fee: 0n,
+        dcerts: [],
+        withdrawals: [[wrongWithdrawalAddress, 0n]],
+        minted: {
+          [`${scriptHash}01`]: 1n
+        },
+        collateral: [],
+        signers: [],
+        totalCollateral: 0n
+      },
+      witnesses: {
+        signatures: [],
+        datums: [],
+        redeemers: [
+          {
+            _tag: "Minting",
+            policyIndex: 0,
+            data: Uplc.Data.makeConstrData(2, [
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0),
+              Uplc.Data.makeIntData(0)
+            ]),
+            cost: {
+              cpu: 0n,
+              mem: 0n
+            }
+          }
+        ],
+        nativeScripts: [],
+        v1Scripts: [],
+        v2Scripts: [],
+        v3Scripts: [],
+        v2RefScripts: [],
+        v3RefScripts: []
+      },
+      isValid: true
+    }
+
+    const scriptContextArgs = makeScriptContextArgs(tx, 0)
+
+    expect(scriptContextArgs).toHaveLength(1)
+
+    const result = evalScriptResult(script, [
+      { data: seedRefData },
+      scriptContextArgs[0]
+    ])
+
+    expect(result.value._tag).toBe("Left")
+  })
+
+  it("fails validation when the purpose tag is unsupported", () => {
+    const script = compileAnchorScript()
+    const { seedRefData } = makeRedeemerTag1Setup(script)
     const noneData = Uplc.Data.makeConstrData(1, [])
     const scriptContextData = Uplc.Data.makeConstrData(0, [
       Uplc.Data.makeConstrData(0, [
@@ -741,14 +1341,7 @@ describe("anchor", () => {
         Uplc.Data.makeListData([]),
         Uplc.Data.makeListData([]),
         Uplc.Data.makeIntData(0),
-        Uplc.Data.makeMapData([
-          [
-            scriptHashData,
-            Uplc.Data.makeMapData([
-              [Uplc.Data.makeByteArrayData(""), Uplc.Data.makeIntData(1)]
-            ])
-          ]
-        ]),
+        Uplc.Data.makeMapData([]),
         Uplc.Data.makeListData([]),
         Uplc.Data.makeMapData([]),
         noneData,
@@ -767,7 +1360,7 @@ describe("anchor", () => {
         Uplc.Data.makeIntData(0),
         Uplc.Data.makeIntData(0)
       ]),
-      Uplc.Data.makeConstrData(0, [scriptHashData])
+      Uplc.Data.makeConstrData(5, [])
     ])
 
     const result = evalScriptResult(script, [
