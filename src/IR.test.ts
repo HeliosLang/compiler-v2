@@ -119,6 +119,78 @@ describe("IR parse", () => {
 })
 
 describe("IR generateUplc", () => {
+  it("inlines single-use call arguments into function bodies", () => {
+    const term = generateUplc(parse(source("((x)->{addInteger(x, 1)})(2)")))
+
+    expect(term._tag).toBe("Apply")
+    if (
+      term._tag !== "Apply" ||
+      term.fn._tag !== "Apply" ||
+      term.fn.fn._tag !== "Builtin"
+    ) {
+      throw new Error("expected direct builtin application")
+    }
+
+    expect(term.fn.fn.name).toBe("addInteger")
+    expect(term.fn.arg._tag).toBe("Const")
+    expect(term.arg._tag).toBe("Const")
+  })
+
+  it("avoids capturing retained parameters when inlining call arguments", () => {
+    const term = generateUplc(parse(source("((x, y)->{x})(y, 1)")), ["y"])
+
+    expect(term._tag).toBe("Var")
+    if (term._tag !== "Var") {
+      throw new Error("expected outer y reference")
+    }
+
+    expect(term.name).toBe("y")
+    expect(term.index).toBe(1)
+  })
+
+  it("doesn't inline call arguments used more than once", () => {
+    const term = generateUplc(parse(source("((x)->{addInteger(x, x)})(2)")))
+
+    expect(term._tag).toBe("Apply")
+    if (term._tag !== "Apply" || term.fn._tag !== "Lambda") {
+      throw new Error("expected lambda application")
+    }
+
+    expect(term.fn.argName).toBe("x")
+  })
+
+  it("drops unused literal call arguments from function applications", () => {
+    const term = generateUplc(parse(source("((x, y)->{y})(1, 2)")))
+
+    expect(term._tag).toBe("Const")
+    if (term._tag !== "Const") {
+      throw new Error("expected flattened constant")
+    }
+
+    expect(term.value._tag).toBe("Int")
+    if (term.value._tag !== "Int") {
+      throw new Error("expected integer literal")
+    }
+
+    expect(term.value.value).toBe(2n)
+  })
+
+  it("flattens zero-arg function calls directly to their body", () => {
+    const term = generateUplc(parse(source("(() -> {1})()")))
+
+    expect(term._tag).toBe("Const")
+    if (term._tag !== "Const") {
+      throw new Error("expected flattened constant")
+    }
+
+    expect(term.value._tag).toBe("Int")
+    if (term.value._tag !== "Int") {
+      throw new Error("expected integer literal")
+    }
+
+    expect(term.value.value).toBe(1n)
+  })
+
   it("wraps builtins in their required number of forces", () => {
     const term = generateUplc(parse(source("chooseList")))
 
@@ -165,20 +237,15 @@ describe("IR generateUplc", () => {
     expect(term.body.body.name).toBe("a")
   })
 
-  it("lowers zero-arg funcs to delay and zero-arg calls to force", () => {
-    const term = generateUplc(parse(source("(() -> {1})()")))
+  it("lowers bare zero-arg funcs to delay", () => {
+    const term = generateUplc(parse(source("() -> {1}")))
 
-    expect(term._tag).toBe("Force")
-    if (term._tag !== "Force") {
-      throw new Error("expected force")
-    }
-
-    expect(term.arg._tag).toBe("Delay")
-    if (term.arg._tag !== "Delay") {
+    expect(term._tag).toBe("Delay")
+    if (term._tag !== "Delay") {
       throw new Error("expected delay")
     }
 
-    expect(term.arg.arg._tag).toBe("Const")
+    expect(term.arg._tag).toBe("Const")
   })
 
   it("converts constr() and case() calls directly into UPLC terms", () => {

@@ -73,4 +73,27 @@ export main = (triple: Triple): Int -> triple.third`,
       value: 33n
     })
   })
+
+  it("decodes tagged structs from constructor data", () => {
+    const value = evalMain(
+      "taggedStruct.hl",
+      `module taggedStruct;
+export MyPair = struct 0 { a: Int, b: Int };
+export main = (pair: MyPair): Int -> addInteger(pair.a, pair.b)`,
+      [
+        { data: { int: 0n } },
+        {
+          data: {
+            constructor: 0,
+            fields: [{ int: 2n }, { int: 3n }]
+          }
+        }
+      ]
+    )
+
+    expect(value).toEqual({
+      _tag: "Const",
+      value: 5n
+    })
+  })
 })

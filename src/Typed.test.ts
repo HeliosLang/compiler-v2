@@ -368,6 +368,54 @@ describe("Typed.parseScripts", () => {
     ).toThrow(/Missing from_data for List\[Bool\]/)
   })
 
+  it("uses constr decoding for tagged structs", () => {
+    const scripts = parseScripts(
+      [source("tagged.hl", `module tagged; export Pair = struct 0 { a: Int, b: Int }`)],
+      builtins
+    )
+
+    const tagged = scripts["tagged"]
+    if (tagged === undefined) {
+      throw new Error("expected script 'tagged'")
+    }
+
+    const pair = tagged.resolved.members["Pair"]
+    if (pair?._tag !== "DataType") {
+      throw new Error("expected 'Pair' to be a DataType")
+    }
+
+    expect(pair.from_data?.ir).toBe("(data) -> {sndPair(unConstrData(data))}")
+  })
+
+  it("allows underscore-prefixed function args to stay unused", () => {
+    const scripts = parseScripts(
+      [source("ignored-arg.hl", `module ignoredArg; export keep = (_x: Int, y: Int): Int -> y`)],
+      builtins
+    )
+
+    const ignoredArg = scripts["ignoredArg"]
+    if (ignoredArg === undefined) {
+      throw new Error("expected script 'ignoredArg'")
+    }
+
+    const keep = ignoredArg.resolved.members["keep"]
+    if (keep?._tag !== "Typed" || keep.type._tag !== "FuncType") {
+      throw new Error("expected 'keep' to be a Typed FuncType")
+    }
+
+    expect(keep.type.args).toHaveLength(2)
+    expect(keep.type.returns._tag).toBe("DataType")
+  })
+
+  it("doesn't add underscore-prefixed function args to scope", () => {
+    expect(() =>
+      parseScripts(
+        [source("ignored-arg-ref.hl", `module ignoredArgRef; export bad = (_x: Int): Int -> _x`)],
+        builtins
+      )
+    ).toThrow(/'_x' not found/)
+  })
+
   it("lowers pipes into inferred generic calls", () => {
     const scripts = parseScripts(
       [source("pipe.hl", `module pipe; export first = true | pipeId`)],

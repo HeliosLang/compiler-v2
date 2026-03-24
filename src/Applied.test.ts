@@ -640,4 +640,32 @@ loop = (n: Int): Int -> loop(n)`
       IR.generateUplc(Applied.generateEntryPointIR(main))
     ).not.toThrow()
   })
+
+  it("attaches each recursive callee's own dependencies inside other recursive functions", () => {
+    const entryPoints = Applied.parseEntryPoints(
+      [
+        {
+          name: "nested-recursive.hl",
+          content: `validator nested;
+export main = (n: Int): Int -> outer(n)
+outer = (n: Int): Int -> inner(outer(n))
+inner = (n: Int): Int -> inner(n)`
+        }
+      ],
+      { globals }
+    )
+
+    const main = entryPoints["nested::main"]
+
+    if (main === undefined) {
+      throw new Error("expected nested::main entrypoint")
+    }
+
+    const ir = IR.pretty(Applied.generateEntryPointIR(main), {
+      maxLineLength: 1000
+    })
+
+    expect(ir.match(/nested::inner\(nested::inner\)/g)?.length).toBe(2)
+    expect(ir.match(/nested::outer\(nested::outer\)/g)?.length).toBe(1)
+  })
 })

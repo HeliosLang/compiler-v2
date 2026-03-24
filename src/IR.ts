@@ -105,12 +105,21 @@ export function resolveNames(
   return resolver.resolveExpression(expr)
 }
 
+export function optimize(
+  expr: Expression
+): Expression {
+  return new Optimizer().optimize(expr)
+}
+
 export function generateUplc(
   expr: Expression,
   scopeNames: Iterable<string> = []
 ): Uplc.Term {
   const scope = Array.from(scopeNames)
-  return new Generator().expression(resolveNames(expr, scope), scope)
+  return new Generator().expression(
+    optimize(resolveNames(expr, scope)),
+    scope
+  )
 }
 
 export interface PrettyOptions {
@@ -945,6 +954,368 @@ class Generator {
       expr.name.sourceSpan,
       `'${expr.name.value}' undefined`
     )
+  }
+}
+
+class Optimizer {
+  constructor() {
+  }
+
+  optimize(expr: Expression): Expression {
+    switch (expr._tag) {
+      case "Call":
+        return this.optimizeCall(expr)
+      case "Error":
+      case "Literal":
+      case "Reference":
+        return expr
+      case "FuncDef":
+        return {
+          ...expr,
+          body: {
+            ...expr.body,
+            expr: this.optimize(expr.body.expr)
+          }
+        }
+    }
+  }
+
+  private optimizeCall(expr: Call): Expression {
+    const fn = this.optimize(expr.fn)
+    const args = expr.args.fields.map((arg) => this.optimize(arg))
+    const optimizedCall: Call = {
+      ...expr,
+      fn,
+      args: {
+        ...expr.args,
+        fields: args
+      }
+    }
+
+    if (fn._tag != "FuncDef") {
+      return optimizedCall
+    }
+
+    const reduced = this.reduceFuncCall(fn, optimizedCall.args)
+
+    return reduced === undefined ? optimizedCall : this.optimize(reduced)
+  }
+
+  private reduceFuncCall(
+    fn: FuncDef,
+    args: Token.Group<"(", Expression>
+  ): Expression | undefined {
+    const consumed = Math.min(fn.args.fields.length, args.fields.length)
+
+    if (consumed == 0) {
+      if (fn.args.fields.length == 0 && args.fields.length == 0) {
+        return fn.body.expr
+      }
+
+      return undefined
+    }
+
+    const substitutedIndices = new Set<number>()
+    const droppedIndices = new Set<number>()
+    const inlineFreeVars = new Set<string>()
+
+    for (let i = 0; i < consumed; i++) {
+      const param = fn.args.fields[i]
+      const arg = args.fields[i]
+
+      if (param === undefined || arg === undefined) {
+        continue
+      }
+
+      const useCount = this.countUses(fn.body.expr, param.value)
+
+      if (useCount == 1) {
+        substitutedIndices.add(i)
+        droppedIndices.add(i)
+
+        this.freeVars(arg).forEach((name) => inlineFreeVars.add(name))
+      } else if (useCount == 0 && this.isSimpleLiteralExpression(arg)) {
+        droppedIndices.add(i)
+      }
+    }
+
+    if (droppedIndices.size == 0) {
+      return undefined
+    }
+
+    const takenNames = this.allNames(fn.body.expr)
+    fn.args.fields.forEach((arg) => takenNames.add(arg.value))
+    args.fields.forEach((arg) =>
+      this.freeVars(arg).forEach((name) => takenNames.add(name))
+    )
+
+    const remainingArgs = fn.args.fields.slice()
+    let body = fn.body.expr
+
+    for (let i = 0; i < remainingArgs.length; i++) {
+      if (substitutedIndices.has(i)) {
+        continue
+      }
+
+      const param = remainingArgs[i]
+
+      if (param === undefined || !inlineFreeVars.has(param.value)) {
+        continue
+      }
+
+      const fresh = this.freshName(param.value, takenNames)
+      takenNames.add(fresh)
+      remainingArgs[i] = {
+        ...param,
+        value: fresh
+      }
+      body = this.renameBound(body, param.value, fresh)
+    }
+
+    for (let i = 0; i < consumed; i++) {
+      if (!substitutedIndices.has(i)) {
+        continue
+      }
+
+      const param = remainingArgs[i]
+      const arg = args.fields[i]
+
+      if (param === undefined || arg === undefined) {
+        continue
+      }
+
+      body = this.substitute(body, param.value, arg, takenNames)
+    }
+
+    const residualParams = remainingArgs.filter(
+      (_, i) => i >= consumed || !droppedIndices.has(i)
+    )
+    const residualArgs = args.fields.filter(
+      (_, i) => i >= consumed || !droppedIndices.has(i)
+    )
+
+    const reducedFn: Expression =
+      residualParams.length == 0
+        ? body
+        : {
+            ...fn,
+            args: {
+              ...fn.args,
+              fields: residualParams,
+              separators: []
+            },
+            body: {
+              ...fn.body,
+              expr: body
+            }
+          }
+
+    return residualArgs.length == 0
+      ? reducedFn
+      : {
+          _tag: "Call",
+          fn: reducedFn,
+          args: {
+            ...args,
+            fields: residualArgs,
+            separators: []
+          }
+        }
+  }
+
+  private isSimpleLiteralExpression(expr: Expression): expr is Literal {
+    return expr._tag == "Literal"
+  }
+
+  private countUses(expr: Expression, name: string): number {
+    switch (expr._tag) {
+      case "Call":
+        return (
+          this.countUses(expr.fn, name) +
+          expr.args.fields.reduce((sum, arg) => sum + this.countUses(arg, name), 0)
+        )
+      case "Error":
+      case "Literal":
+        return 0
+      case "FuncDef":
+        return expr.args.fields.some((arg) => arg.value == name)
+          ? 0
+          : this.countUses(expr.body.expr, name)
+      case "Reference":
+        return this.isLocalReference(expr, name) ? 1 : 0
+    }
+  }
+
+  private freeVars(
+    expr: Expression,
+    scope: Set<string> = new Set<string>()
+  ): Set<string> {
+    switch (expr._tag) {
+      case "Call": {
+        const result = this.freeVars(expr.fn, scope)
+
+        expr.args.fields.forEach((arg) =>
+          this.freeVars(arg, scope).forEach((name) => result.add(name))
+        )
+
+        return result
+      }
+      case "Error":
+      case "Literal":
+        return new Set<string>()
+      case "FuncDef": {
+        const nextScope = new Set(scope)
+        expr.args.fields.forEach((arg) => nextScope.add(arg.value))
+        return this.freeVars(expr.body.expr, nextScope)
+      }
+      case "Reference":
+        return !expr.isBuiltin &&
+          !expr.isSpecial &&
+          !scope.has(expr.name.value)
+          ? new Set([expr.name.value])
+          : new Set<string>()
+    }
+  }
+
+  private allNames(expr: Expression): Set<string> {
+    switch (expr._tag) {
+      case "Call": {
+        const result = this.allNames(expr.fn)
+
+        expr.args.fields.forEach((arg) =>
+          this.allNames(arg).forEach((name) => result.add(name))
+        )
+
+        return result
+      }
+      case "Error":
+      case "Literal":
+        return new Set<string>()
+      case "FuncDef": {
+        const result = this.allNames(expr.body.expr)
+        expr.args.fields.forEach((arg) => result.add(arg.value))
+        return result
+      }
+      case "Reference":
+        return new Set([expr.name.value])
+    }
+  }
+
+  private renameBound(expr: Expression, from: string, to: string): Expression {
+    switch (expr._tag) {
+      case "Call":
+        return {
+          ...expr,
+          fn: this.renameBound(expr.fn, from, to),
+          args: {
+            ...expr.args,
+            fields: expr.args.fields.map((arg) => this.renameBound(arg, from, to))
+          }
+        }
+      case "Error":
+      case "Literal":
+        return expr
+      case "FuncDef":
+        return expr.args.fields.some((arg) => arg.value == from)
+          ? expr
+          : {
+              ...expr,
+              body: {
+                ...expr.body,
+                expr: this.renameBound(expr.body.expr, from, to)
+              }
+            }
+      case "Reference":
+        return this.isLocalReference(expr, from)
+          ? {
+              ...expr,
+              name: {
+                ...expr.name,
+                value: to
+              }
+            }
+          : expr
+    }
+  }
+
+  private substitute(
+    expr: Expression,
+    name: string,
+    replacement: Expression,
+    takenNames: Set<string>
+  ): Expression {
+    switch (expr._tag) {
+      case "Call":
+        return {
+          ...expr,
+          fn: this.substitute(expr.fn, name, replacement, takenNames),
+          args: {
+            ...expr.args,
+            fields: expr.args.fields.map((arg) =>
+              this.substitute(arg, name, replacement, takenNames)
+            )
+          }
+        }
+      case "Error":
+      case "Literal":
+        return expr
+      case "FuncDef": {
+        if (expr.args.fields.some((arg) => arg.value == name)) {
+          return expr
+        }
+
+        const replacementFreeVars = this.freeVars(replacement)
+        const nextArgs = expr.args.fields.slice()
+        let body = expr.body.expr
+
+        for (let i = 0; i < nextArgs.length; i++) {
+          const arg = nextArgs[i]
+
+          if (arg === undefined || !replacementFreeVars.has(arg.value)) {
+            continue
+          }
+
+          const fresh = this.freshName(arg.value, takenNames)
+          takenNames.add(fresh)
+          nextArgs[i] = {
+            ...arg,
+            value: fresh
+          }
+          body = this.renameBound(body, arg.value, fresh)
+        }
+
+        return {
+          ...expr,
+          args: {
+            ...expr.args,
+            fields: nextArgs,
+            separators: []
+          },
+          body: {
+            ...expr.body,
+            expr: this.substitute(body, name, replacement, takenNames)
+          }
+        }
+      }
+      case "Reference":
+        return this.isLocalReference(expr, name) ? replacement : expr
+    }
+  }
+
+  private freshName(base: string, taken: Set<string>): string {
+    let i = 0
+    let candidate = `${base}$${i}`
+
+    while (taken.has(candidate)) {
+      i += 1
+      candidate = `${base}$${i}`
+    }
+
+    return candidate
+  }
+
+  private isLocalReference(expr: Reference, name: string): boolean {
+    return !expr.isBuiltin && !expr.isSpecial && expr.name.value == name
   }
 }
 

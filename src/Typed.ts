@@ -115,6 +115,10 @@ function isMapType(type: Type): type is DataType {
   return type._tag == "DataType" && type.path.names[0].value == "Map"
 }
 
+export function isIgnoredFunctionArg(name: string): boolean {
+  return name.startsWith("_")
+}
+
 function isUnitType(type: Type): type is DataType {
   return type._tag == "DataType" && pathToString(type.path) == "Unit"
 }
@@ -129,7 +133,7 @@ export interface GenericValue {
   readonly _tag: "GenericValue"
   readonly nArgs: number
   readonly type: (args: DataType[]) => Type | Typed
-  readonly inferCall?: ((fnArgs: DataType[]) => DataType[]) | undefined
+  readonly inferCall?: ((fnArgs: DataType[], sourceSpan: Source.Span) => DataType[]) | undefined
 }
 
 function isInstanceOf(typed: Typed, type: Type) {
@@ -1381,7 +1385,7 @@ class Resolver {
         return arg.resolved.type
       })
 
-      const inferredTypeArgs = resolvedFn.resolved.inferCall(fnArgTypes)
+      const inferredTypeArgs = resolvedFn.resolved.inferCall(fnArgTypes, untyped.args.open.sourceSpan)
 
       if (inferredTypeArgs.length != resolvedFn.resolved.nArgs) {
         throw new Error("inferCall() returned an unexpected number of types")
@@ -1747,6 +1751,10 @@ class Resolver {
 
     let bodyScope = scope
     for (const arg of args) {
+      if (isIgnoredFunctionArg(arg.name.value)) {
+        continue
+      }
+
       bodyScope = addToScope(
         bodyScope,
         arg.name,
@@ -2387,7 +2395,10 @@ class Resolver {
         properties,
         variants: {},
         from_data: {
-          ir: "unListData",
+          ir:
+            untyped.tag === undefined
+              ? "unListData"
+              : "(data) -> {sndPair(unConstrData(data))}",
           deps: []
         }
       }
@@ -2629,6 +2640,10 @@ class Resolver {
     scope: Scope
   ): FuncDef {
     for (const arg of funcDef.args.fields) {
+      if (isIgnoredFunctionArg(arg.name.value)) {
+        continue
+      }
+
       scope = addToScope(
         scope,
         arg.name,

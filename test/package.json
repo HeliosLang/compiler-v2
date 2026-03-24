@@ -7,7 +7,7 @@
   },
   "dependencies": {
     "@helios-lang/compiler": "link:..",
-    "@helios-lang/effect": "0.4.31",
+    "@helios-lang/effect": "0.4.33",
     "effect": "^3.19.19"
   },
   "devDependencies": {

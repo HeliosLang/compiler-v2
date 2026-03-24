@@ -404,7 +404,7 @@ class Applier {
   private orderDefinitions(
     graph: Readonly<Record<string, Definition>>
   ): Definition[] {
-    const definitions: Definition[] = []
+    const ordered: Definition[] = []
     const done = new Set<string>()
 
     while (done.size < Object.keys(graph).length) {
@@ -446,14 +446,8 @@ class Applier {
             const depKey = pathToString(d)
             return depKey in graph && !done.has(depKey)
           })
-          const expr =
-            deps.length > 0
-              ? applyMutualDependenciesToReferences(def.expr, deps)
-              : def.expr
-
-          definitions.push({
+          ordered.push({
             ...def,
-            expr,
             dependencies: deps
           })
 
@@ -462,7 +456,22 @@ class Applier {
       }
     }
 
-    return definitions
+    const dependencyMap = Object.fromEntries(
+      ordered
+        .filter((definition) => (definition.dependencies?.length ?? 0) > 0)
+        .map((definition) => [
+          pathToString(definition.path),
+          definition.dependencies ?? []
+        ])
+    )
+
+    return ordered.map((definition) => ({
+      ...definition,
+      expr: applyDefinitionDependenciesToReferences(
+        definition.expr,
+        dependencyMap
+      )
+    }))
   }
 
   private createDefinitionGraph(
@@ -1086,24 +1095,33 @@ function applyMutualDependenciesToReferences(
   expr: Expression,
   deps: Path[]
 ): Expression {
-  const depSet = new Set(deps.map(pathToString))
+  return applyDefinitionDependenciesToReferences(
+    expr,
+    Object.fromEntries(deps.map((dep) => [pathToString(dep), deps]))
+  )
+}
+
+function applyDefinitionDependenciesToReferences(
+  expr: Expression,
+  dependencyMap: Readonly<Record<string, Path[]>>
+): Expression {
+  const rewrite = (subExpr: Expression) =>
+    applyDefinitionDependenciesToReferences(subExpr, dependencyMap)
 
   switch (expr._tag) {
     case "BinaryOp":
       return {
         ...expr,
-        left: applyMutualDependenciesToReferences(expr.left, deps),
-        right: applyMutualDependenciesToReferences(expr.right, deps)
+        left: rewrite(expr.left),
+        right: rewrite(expr.right)
       }
     case "Call":
       return {
         ...expr,
-        fn: applyMutualDependenciesToReferences(expr.fn, deps),
+        fn: rewrite(expr.fn),
         args: {
           ...expr.args,
-          fields: expr.args.fields.map((a) =>
-            applyMutualDependenciesToReferences(a, deps)
-          )
+          fields: expr.args.fields.map(rewrite)
         }
       }
     case "Chain":
@@ -1113,13 +1131,13 @@ function applyMutualDependenciesToReferences(
           if (statement._tag == "Assign") {
             return {
               ...statement,
-              rhs: applyMutualDependenciesToReferences(statement.rhs, deps)
+              rhs: rewrite(statement.rhs)
             }
           }
 
-          return applyMutualDependenciesToReferences(statement, deps) as Call
+          return rewrite(statement) as Call
         }),
-        returns: applyMutualDependenciesToReferences(expr.returns, deps)
+        returns: rewrite(expr.returns)
       }
     case "Construct":
       return {
@@ -1128,36 +1146,28 @@ function applyMutualDependenciesToReferences(
           ...expr.args,
           fields: expr.args.fields.map((f) => ({
             ...f,
-            value: applyMutualDependenciesToReferences(f.value, deps)
+            value: rewrite(f.value)
           }))
         }
       }
     case "FuncDef":
       return {
         ...expr,
-        body: applyMutualDependenciesToReferences(expr.body, deps)
+        body: rewrite(expr.body)
       }
     case "IfElse":
       return {
         ...expr,
-        condition: applyMutualDependenciesToReferences(expr.condition, deps),
-        ifBranch: applyMutualDependenciesToReferences(
-          expr.ifBranch,
-          deps
-        ) as Chain,
-        elseBranch: applyMutualDependenciesToReferences(
-          expr.elseBranch,
-          deps
-        ) as IfElse | Chain
+        condition: rewrite(expr.condition),
+        ifBranch: rewrite(expr.ifBranch) as Chain,
+        elseBranch: rewrite(expr.elseBranch) as IfElse | Chain
       }
     case "ListConstruct":
       return {
         ...expr,
         args: {
           ...expr.args,
-          fields: expr.args.fields.map((a) =>
-            applyMutualDependenciesToReferences(a, deps)
-          )
+          fields: expr.args.fields.map(rewrite)
         }
       }
     case "Literal":
@@ -1169,51 +1179,48 @@ function applyMutualDependenciesToReferences(
           ...expr.args,
           fields: expr.args.fields.map((f) => ({
             ...f,
-            key: applyMutualDependenciesToReferences(f.key, deps),
-            value: applyMutualDependenciesToReferences(f.value, deps)
+            key: rewrite(f.key),
+            value: rewrite(f.value)
           }))
         }
       }
     case "Member":
       return {
         ...expr,
-        object: applyMutualDependenciesToReferences(expr.object, deps)
+        object: rewrite(expr.object)
       }
     case "MultiParens":
       return {
         ...expr,
         group: {
           ...expr.group,
-          fields: expr.group.fields.map((a) =>
-            applyMutualDependenciesToReferences(a, deps)
-          )
+          fields: expr.group.fields.map(rewrite)
         }
       }
     case "Raw":
       return expr
     case "Reference": {
       const refPath = expr.resolved.path ?? expr.path
+      const refDeps = dependencyMap[pathToString(refPath)]
 
-      return depSet.has(pathToString(refPath))
-        ? { ...expr, dependencies: deps }
+      return refDeps !== undefined && refDeps.length > 0
+        ? { ...expr, dependencies: refDeps }
         : expr
     }
     case "SingleParens":
       return {
         ...expr,
-        expr: applyMutualDependenciesToReferences(expr.expr, deps)
+        expr: rewrite(expr.expr)
       }
     case "TemplateString":
       return {
         ...expr,
-        tokens: expr.tokens.map((t) =>
-          applyMutualDependenciesToReferences(t, deps)
-        )
+        tokens: expr.tokens.map(rewrite)
       }
     case "UnaryOp":
       return {
         ...expr,
-        right: applyMutualDependenciesToReferences(expr.right, deps)
+        right: rewrite(expr.right)
       }
   }
 }
@@ -2153,7 +2160,12 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
       throw new Error("Unexpected")
     }
 
-    const redeemerExpr = IR.makeBuiltinCall("headList", [
+    const redeemerArg = body.args.fields[0]
+    if (redeemerArg.type._tag != "DataType") {
+      throw new Error("Unexpected")
+    }
+
+    const redeemerExpr: IR.Expression = Typed.isIgnoredFunctionArg(redeemerArg.name.value) ? {_tag: "Literal", value: {_tag: "Unit"}, sourceSpan: Source.DummySpan()} : IR.makeBuiltinCall("headList", [
       IR.makeBuiltinCall("tailList", [
         IR.makeBuiltinCall("sndPair", [
           IR.makeBuiltinCall("unConstrData", [
@@ -2163,10 +2175,7 @@ export function generateEntryPointIR(entryPoint: EntryPoint): IR.Expression {
       ])
     ])
 
-    const redeemerArg = body.args.fields[0]
-    if (redeemerArg.type._tag != "DataType") {
-      throw new Error("Unexpected")
-    }
+    
 
     if (pathToString(redeemerArg.type.path) != "Data") {
       result = makeFromDataCall(redeemerArg.type, redeemerExpr)

@@ -1,19 +1,64 @@
 import { describe, expect, it } from "bun:test"
 import { compile } from "../src/index.js"
 
+const utils = `module ScriptContext
+
+export Address = struct 0{
+    spending_cred: Data,
+    staking_cred: Data
+}
+
+export TxOutput = struct 0{
+    address: Address,
+    assets: List[Pair[Data, List[Pair[Data, Data]]]],
+    datum: Data
+}
+
+export UTxO = struct 0{
+    ref: Data,
+    output: TxOutput
+}
+
+export Tx = struct 0{
+  inputs: List[Data],
+  ref_inputs: List[Data],
+  outputs: List[Data],
+  fee: Data,
+  minted: List[Pair[Data, List[Pair[Data, Data]]]],
+  dcerts: Data,
+  withdrawals: List[Pair[Data, Data]],
+  validity_time_range: Data,
+  signers: List[Data],
+  redeemers: Data,
+  datums: Data,
+  tx_hash: ByteArray,
+  votes: Data,
+  proposal_procedures: Data,
+  current_treasury_amount: Data,
+  treasury_donation: Data
+}
+
+export ScriptContext = struct 0{
+    tx: Tx,
+    redeemer: Data,
+    purpose: Data
+}
+`
+
 const src = `validator anchor
+import ScriptContext
 
 export SEED: Data
 
-export main = (redeemer: Data) -> {
-    ctx = unConstrData(scriptContextData) | sndPair
-    tx = headList(ctx) | unConstrData | sndPair
+export main = (_redeemer: Data) -> {
+    ctx = scriptContextData as ScriptContext::ScriptContext
+    tx = ctx.tx
 
-    redeemer_pair = unConstrData(redeemer)
+    redeemer_pair = unConstrData(ctx.redeemer)
     redeemer_tag = fstPair(redeemer_pair)
 
     if (redeemer_tag == 0) {
-        if (spends_seed(unListData(headList(tx)))) {
+        if (spends_seed(tx.inputs)) {
             ()
         } else {
             error()
@@ -21,38 +66,48 @@ export main = (redeemer: Data) -> {
     } else {
         // index of the state input/ref-input
         ptr_fields = sndPair(redeemer_pair)
-        input_ptr = headList(ptr_fields) | unIData
-        witness_ptr = tailList(ptr_fields) | headList | unIData
-        signer_ptr = tailList(ptr_fields) | tailList | headList | unIData
+        input_ptr = unIData(headList(ptr_fields))
+        witness_ptr = unIData(headList(tailList(ptr_fields)))
+        signer_ptr = unIData(headList(tailList(tailList(ptr_fields))))
 
         own_hash = get_own_hash(
-            headList(tailList(tailList(ctx))),
+            ctx.purpose,
             tx
         )
 
-        inputs = unListData(
-            if (redeemer_tag == 1) {
-                headList(tx)
-            } else {
-                headList(tailList(tx))
-            }
-        )
+        inputs = if (redeemer_tag == 1) {
+            // state token must be returned to this validator
+            output_ptr = unIData(headList(tailList(tailList(tailList(ptr_fields)))))
+            output = get(tx.outputs, output_ptr, 0) as ScriptContext::TxOutput
 
-        input = get(inputs, input_ptr, 0) | unConstrData | sndPair
-        input_output = tailList(input) | headList | unConstrData | sndPair
-        input_assets = tailList(input_output) | headList | unMapData
+            if (contains_state_token(output.assets, own_hash)) {
+                if (output.address.spending_cred == constrData(1, mkCons(own_hash, mkNilData(())) )) {
+                    tx.inputs
+                } else {
+                    error()
+                }
+            } else {
+                error()
+            }
+        } else {
+            tx.ref_inputs
+        }
+
+        input = get(inputs, input_ptr, 0) as ScriptContext::UTxO
+        input_output = input.output
+        input_assets = input_output.assets
 
         // make sure the input contains at least one state asset
-        if (assets_contain(input_assets, own_hash)) {
+        if (contains_state_token(input_assets, own_hash)) {
             // now get the datum
-            input_datum = unListData(headList(sndPair(unConstrData(headList(tailList(tailList(input_output)))))))
+            input_datum = unListData(headList(sndPair(unConstrData(input_output.datum))))
 
             witness = unConstrData(get(input_datum, witness_ptr, 0))
             witness_tag = fstPair(witness)
 
             if (witness_tag == 0) {
                 // signed by PubKeyHash
-                pkh = get(unListData(headList(tailList(tailList(tailList(tailList(tailList(tailList(tailList(tailList(tx)))))))))), signer_ptr, 0)
+                pkh = get(tx.signers, signer_ptr, 0)
 
                 if (pkh == headList(sndPair(witness))) {
                     ()
@@ -61,7 +116,7 @@ export main = (redeemer: Data) -> {
                 }
             } else {
                 // witnessed by staking credential in withdrawal
-                pair = get_pair(unMapData(headList(tailList(tailList(tailList(tailList(tailList(tailList(tx)))))))), signer_ptr, 0)
+                pair = get_pair(tx.withdrawals, signer_ptr, 0)
 
                 if (fstPair(pair) == headList(sndPair(witness))) {
                     ()
@@ -85,19 +140,28 @@ spends_seed = (inputs: List[Data]): Bool -> {
     }
 }
 
-get_own_hash = (purpose: Data, tx: List[Data]): Data -> {
+get_own_hash = (purpose: Data, tx: ScriptContext::Tx): Data -> {
     purpose_pair = unConstrData(purpose)
     purpose_tag = fstPair(purpose_pair)
     purpose_fields = sndPair(purpose_pair)
 
     if (purpose_tag == 0) {
         // minting
-        headList(purpose_fields)
+        policy = headList(purpose_fields)
+
+        // can never mint/burn the state token
+        if (contains_state_token(tx.minted, policy)) {
+            error()
+        } else {
+            policy
+        }
     } else if (purpose_tag == 1) {
         // spending validator credential
-        input = find_input(unListData(headList(tx)), headList(purpose_fields))
+        input = sndPair(unConstrData(find_input(tx.inputs, headList(purpose_fields))))
+        input_output = sndPair(unConstrData(headList(tailList(input))))
+        input_address = sndPair(unConstrData(headList(input_output)))
 
-        headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(tailList(input)))))))))))
+        headList(input_address)
     } else if (purpose_tag == 2) {
         // rewarding
         headList(sndPair(unConstrData(headList(sndPair(unConstrData(headList(purpose_fields)))))))
@@ -121,42 +185,57 @@ get_own_hash = (purpose: Data, tx: List[Data]): Data -> {
     }
 }
 
-find_input = (inputs: List[Data], ref: Data): List[Data] -> {
-    input = sndPair(unConstrData(headList(inputs)))
+find_input = (inputs: List[Data], ref: Data): Data -> {
+    input = headList(inputs)
+    input_fields = sndPair(unConstrData(input))
 
-    if (headList(input) == ref) {
+    if (headList(input_fields) == ref) {
         input
     } else {
         find_input(tailList(inputs), ref)
     }
 }
 
-get = (inputs: List[Data], index: Int, running_idx: Int): Data -> {
+get = (items: List[Data], index: Int, running_idx: Int): Data -> {
     if (index == running_idx) {
-        headList(inputs)
+        headList(items)
     } else {
-        get(inputs, index, addInteger(running_idx, 1))
+        get(items, index, addInteger(running_idx, 1))
     }
 }
 
-get_pair = (inputs: List[Pair[Data, Data]], index: Int, running_idx: Int): Pair[Data, Data] -> {
+get_pair = (items: List[Pair[Data, Data]], index: Int, running_idx: Int): Pair[Data, Data] -> {
     if (index == running_idx) {
-        headList(inputs)
+        headList(items)
     } else {
-        get_pair(tailList(inputs), index, addInteger(running_idx, 1))
+        get_pair(tailList(items), index, addInteger(running_idx, 1))
     }
 }
 
-assets_contain = (assets: List[Pair[Data, Data]], policy: Data): Bool -> {
+contains_state_token = (assets: List[Pair[Data, List[Pair[Data, Data]]]], policy: Data): Bool -> {
     if (nullList(assets)) {
         false
     } else {
         entry = headList(assets)
 
-        if (fstPair(entry) == policy) {
+        if (entry.first == policy) {
+            tokens_contain(entry.second, bData(#))
+        } else {
+            contains_state_token(tailList(assets), policy)
+        }
+    }
+}
+    
+tokens_contain = (map: List[Pair[Data, Data]], token_name: Data): Bool -> {
+    if (nullList(map)) {
+        false
+    } else {
+        entry = headList(map)
+
+        if (fstPair(entry) == token_name) {
             true
         } else {
-            assets_contain(tailList(assets), policy)
+            tokens_contain(tailList(map), token_name)
         }
     }
 }`
@@ -168,6 +247,10 @@ describe("anchor", () => {
         {
           name: "anchor.hl",
           content: src
+        },
+        {
+            name: "ScriptContext.hl",
+            content: utils
         }
       ],
       {

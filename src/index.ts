@@ -1,4 +1,5 @@
 import * as Applied from "./Applied.js"
+import * as CompilerError from "./CompilerError.js"
 import * as IR from "./IR.js"
 import * as Typed from "./Typed.js"
 import * as Untyped from "./Untyped.js"
@@ -150,22 +151,51 @@ function makeGlobals(): Applied.Globals {
         appliedTypes: [item]
       },
       properties: {},
-      variants: {}
+      variants: {},
+      from_data: {
+        ir: item.path.names[0].value == "Pair" ? "unMapData" : "unListData",
+        deps: []
+      }
     })
   }
 
   const pairGeneric: Typed.GenericValue = {
     _tag: "GenericValue",
     nArgs: 2,
-    type: ([first, second]) => ({
-      _tag: "DataType",
-      path: {
-        ...makePath("Pair"),
-        appliedTypes: [first, second]
-      },
-      properties: {},
-      variants: {}
-    })
+    type: ([first, second]) => {
+      if (first.from_data === undefined) {
+        throw new Error(`${Typed.pathToString(first.path)}:::from_data not defined`)
+      }
+
+      if (second.from_data === undefined) {
+        throw new Error(`${Typed.pathToString(second.path)}:::from_data not defined`)
+      }
+
+      return {
+        _tag: "DataType",
+        path: {
+          ...makePath("Pair"),
+          appliedTypes: [first, second]
+        },
+        properties: {
+          first: {
+            symbolValue: first,
+            implementation: {
+              ir: Typed.pathToString(first.path) == "Data" ? "fstPair" : `(self) -> {${first.from_data.ir}(fstPair(self))}`,
+              deps: first.from_data.deps
+            }
+          },
+          second: {
+            symbolValue: second,
+            implementation: {
+              ir: Typed.pathToString(second.path) == "Data" ? "sndPair" : `(self) -> {${second.from_data.ir}(sndPair(self))}`,
+              deps: second.from_data.deps
+            }
+          }
+        },
+        variants: {}
+      }
+    }
   }
 
   const fstPairGeneric: Typed.GenericValue = {
@@ -240,11 +270,11 @@ function makeGlobals(): Applied.Globals {
   const tailListGeneric: Typed.GenericValue = {
     _tag: "GenericValue",
     nArgs: 1,
-    inferCall: ([list]) => {
+    inferCall: ([list], sourceSpan: Source.Span) => {
       const item = list.path.appliedTypes?.[0]
 
       if (item === undefined) {
-        throw new Error("tailList() expects a list argument")
+        throw new CompilerError.Type(sourceSpan, "tailList() expects a list argument")
       }
 
       return [item]

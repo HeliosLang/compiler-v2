@@ -260,6 +260,23 @@ describe("Untyped.parseScript", () => {
     expect(expr.fields[1]?.key?.value).toBe("flag")
   })
 
+  it("parses an optional struct tag before the opening brace", () => {
+    const ast = parseScript(source(`module sample value: struct 1 { count: Int }`))
+
+    const declare = ast.statements[0]
+    if (declare?._tag !== "Declare") {
+      throw new Error("expected Declare statement")
+    }
+
+    const expr = declare.type.type
+    expect(expr._tag).toBe("Struct")
+    if (expr._tag !== "Struct") {
+      throw new Error("expected Struct expression")
+    }
+
+    expect(expr.tag?.value).toBe(1n)
+  })
+
   it("parses enum variants separated by semicolons", () => {
     const ast = parseScript(source(`module sample Choice = enum {Ok; Err}`))
 

@@ -368,11 +368,12 @@ export function extractSingleWordFromReference(expr: Expression): Token.Word {
 }
 
 /**
- * Struct type declaration that matches the ListData or MapData encoding
+ * Struct type declaration that matches the ListData or ConstrData encoding
  */
 export interface Struct {
   readonly _tag: "Struct"
   readonly struct: Token.Word<"struct">
+  readonly tag?: Token.Int | undefined
   readonly open: Token.Symbol<"{">
   readonly fields: {
     readonly name: Token.Word
@@ -889,6 +890,7 @@ class Parser {
   }
 
   private parseStruct(structWord: Token.Word<"struct">, r: Reader): Struct {
+    const tag = r.matches(int())
     const fieldsGroup = r.matches(group("{"))
 
     if (fieldsGroup === undefined) {
@@ -898,6 +900,7 @@ class Parser {
     return {
       _tag: "Struct",
       struct: structWord,
+      tag,
       open: fieldsGroup.open,
       fields: fieldsGroup.fields.map((field) => {
         const m = field.matches(anyName, symbol(":"))
