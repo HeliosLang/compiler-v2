@@ -374,7 +374,7 @@ class Applier {
   applyEntryPoint(entryPointPath: Typed.Path): EntryPoint {
     const graph = this.createDefinitionGraph(entryPointPath)
 
-    let definitions = this.orderDefinitions(graph)
+    let definitions = orderDefinitions(graph)
 
     const entryPointDef = definitions.find(
       (d) => pathToString(d.path) == pathToString(entryPointPath)
@@ -399,79 +399,6 @@ class Applier {
       isValidator: false, // determined by caller
       body: entryPointDef.expr
     }
-  }
-
-  private orderDefinitions(
-    graph: Readonly<Record<string, Definition>>
-  ): Definition[] {
-    const ordered: Definition[] = []
-    const done = new Set<string>()
-
-    while (done.size < Object.keys(graph).length) {
-      let picked: Definition[] = []
-      let pickedNonDoneDeps = new Set<string>()
-
-      for (const k in graph) {
-        if (done.has(k)) {
-          continue
-        }
-
-        const def = graph[k]
-
-        const nonDoneDeps = new Set(
-          (def.dependencies ?? []).map(pathToString).filter((depKey) => {
-            return depKey in graph && !done.has(depKey)
-          })
-        )
-
-        if (picked.length == 0) {
-          picked = [def]
-          pickedNonDoneDeps = nonDoneDeps
-        } else if (nonDoneDeps.size < pickedNonDoneDeps.size) {
-          picked = [def]
-          pickedNonDoneDeps = nonDoneDeps
-        } else if (
-          nonDoneDeps.size == pickedNonDoneDeps.size &&
-          nonDoneDeps.difference(pickedNonDoneDeps).size == 0
-        ) {
-          picked.push(def)
-        }
-      }
-
-      if (picked.length == 0) {
-        break
-      } else {
-        for (const def of picked) {
-          const deps = (def.dependencies ?? []).filter((d) => {
-            const depKey = pathToString(d)
-            return depKey in graph && !done.has(depKey)
-          })
-          ordered.push({
-            ...def,
-            dependencies: deps
-          })
-
-          done.add(pathToString(def.path))
-        }
-      }
-    }
-
-    const dependencyMap = Object.fromEntries(
-      ordered
-        .filter((definition) => (definition.dependencies?.length ?? 0) > 0)
-        .map((definition) => [
-          pathToString(definition.path),
-          definition.dependencies ?? []
-        ])
-    )
-
-    return ordered.map((definition) => ({
-      ...definition,
-      expr: applyDefinitionDependenciesToReferences(
-        definition.expr,
-        dependencyMap
-      )
-    }))
   }
 
   private createDefinitionGraph(
@@ -2318,3 +2245,164 @@ function wrapWithDefinition(
     }
   }
 }
+
+
+  function orderDefinitions(
+    graph: Readonly<Record<string, Definition>>
+  ): Definition[] {
+    const nodeKeys = Object.keys(graph)
+    const keyIndices = new Map(nodeKeys.map((key, i) => [key, i]))
+    const adjacency = Object.fromEntries(
+      nodeKeys.map((key) => [
+        key,
+        (graph[key]?.dependencies ?? [])
+          .map(pathToString)
+          .filter((depKey) => depKey in graph)
+      ])
+    ) satisfies Record<string, string[]>
+    const components = findStronglyConnectedComponents(nodeKeys, adjacency)
+    const componentByKey = new Map<string, number>()
+
+    components.forEach((component, i) => {
+      component.forEach((key) => componentByKey.set(key, i))
+    })
+
+    const orderedComponents: string[][] = []
+    const seenComponents = new Set<number>()
+
+    const visitComponent = (componentIndex: number) => {
+      if (seenComponents.has(componentIndex)) {
+        return
+      }
+
+      seenComponents.add(componentIndex)
+
+      for (const key of components[componentIndex] ?? []) {
+        for (const depKey of adjacency[key] ?? []) {
+          const depComponentIndex = componentByKey.get(depKey)
+
+          if (
+            depComponentIndex !== undefined &&
+            depComponentIndex != componentIndex
+          ) {
+            visitComponent(depComponentIndex)
+          }
+        }
+      }
+
+      const sortedComponent = [...(components[componentIndex] ?? [])].sort(
+        (a, b) => (keyIndices.get(a) ?? 0) - (keyIndices.get(b) ?? 0)
+      )
+
+      orderedComponents.push(sortedComponent)
+    }
+
+    nodeKeys.forEach((key) => {
+      const componentIndex = componentByKey.get(key)
+
+      if (componentIndex !== undefined) {
+        visitComponent(componentIndex)
+      }
+    })
+
+    const ordered = orderedComponents.flatMap((component) => {
+      const componentMembers = new Set(component)
+
+      return component.map((key) => {
+        const definition = graph[key]
+
+        if (definition === undefined) {
+          throw new Error(`missing definition for ${key}`)
+        }
+
+        return {
+          ...definition,
+          dependencies: (definition.dependencies ?? []).filter((dependency) =>
+            componentMembers.has(pathToString(dependency))
+          )
+        }
+      })
+    })
+
+    const dependencyMap = Object.fromEntries(
+      ordered
+        .filter((definition) => (definition.dependencies?.length ?? 0) > 0)
+        .map((definition) => [
+          pathToString(definition.path),
+          definition.dependencies ?? []
+        ])
+    )
+
+    return ordered.map((definition) => ({
+      ...definition,
+      expr: applyDefinitionDependenciesToReferences(
+        definition.expr,
+        dependencyMap
+      )
+    }))
+  }
+
+function findStronglyConnectedComponents(
+  nodeKeys: readonly string[],
+  adjacency: Readonly<Record<string, readonly string[]>>
+): string[][] {
+    let index = 0
+    const indices = new Map<string, number>()
+    const lowLinks = new Map<string, number>()
+    const stack: string[] = []
+    const onStack = new Set<string>()
+    const components: string[][] = []
+
+    const visit = (key: string) => {
+      indices.set(key, index)
+      lowLinks.set(key, index)
+      index += 1
+      stack.push(key)
+      onStack.add(key)
+
+      for (const depKey of adjacency[key] ?? []) {
+        if (!indices.has(depKey)) {
+          visit(depKey)
+
+          lowLinks.set(
+            key,
+            Math.min(lowLinks.get(key) ?? Infinity, lowLinks.get(depKey) ?? 0)
+          )
+        } else if (onStack.has(depKey)) {
+          lowLinks.set(
+            key,
+            Math.min(lowLinks.get(key) ?? Infinity, indices.get(depKey) ?? 0)
+          )
+        }
+      }
+
+      if (lowLinks.get(key) == indices.get(key)) {
+        const component: string[] = []
+
+        while (stack.length > 0) {
+          const member = stack.pop()
+
+          if (member === undefined) {
+            break
+          }
+
+          onStack.delete(member)
+          component.push(member)
+
+          if (member == key) {
+            break
+          }
+        }
+
+        components.push(component)
+      }
+    }
+
+    nodeKeys.forEach((key) => {
+      if (!indices.has(key)) {
+        visit(key)
+      }
+    })
+
+    return components
+  }

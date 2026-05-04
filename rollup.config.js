@@ -12,6 +12,8 @@ export default {
   plugins: [
     typescript({
       tsconfig: "./tsconfig.json", // set "noEmit": false here (for d.ts) or use a separate types pass
+      outDir: "dist",
+      declarationDir: "dist",
       declaration: true, // usually do types in a separate tsc pass
       noEmitOnError: true,
       noCheck: true

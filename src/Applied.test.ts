@@ -668,4 +668,38 @@ inner = (n: Int): Int -> inner(n)`
     expect(ir.match(/nested::inner\(nested::inner\)/g)?.length).toBe(2)
     expect(ir.match(/nested::outer\(nested::outer\)/g)?.length).toBe(1)
   })
+
+  it("orders self-recursive dependencies before their callers", () => {
+    const entryPoints = Applied.parseEntryPoints(
+      [
+        {
+          name: "ordered-recursive.hl",
+          content: `validator ordered;
+export main = (n: Int): Int -> validate_witness(n)
+validate_witness = (n: Int): Int -> addInteger(get(n), get_pair(n))
+get = (n: Int): Int -> get(n)
+get_pair = (n: Int): Int -> get_pair(n)`
+        }
+      ],
+      { globals }
+    )
+
+    const main = entryPoints["ordered::main"]
+
+    if (main === undefined) {
+      throw new Error("expected ordered::main entrypoint")
+    }
+
+    const definitionNames = main.definitions.map((definition) =>
+      definition.path.names.map((name) => name.value).join("::")
+    )
+
+    expect(definitionNames.indexOf("ordered::get")).toBeGreaterThanOrEqual(0)
+    expect(
+      definitionNames.indexOf("ordered::validate_witness")
+    ).toBeGreaterThanOrEqual(0)
+    expect(definitionNames.indexOf("ordered::get")).toBeLessThan(
+      definitionNames.indexOf("ordered::validate_witness")
+    )
+  })
 })

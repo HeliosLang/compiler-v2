@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import { Effect, Schema } from "effect"
 import { Ledger, Network, ScriptContext, Uplc } from "@helios-lang/effect/Cardano"
+import { Bytes } from "@helios-lang/effect/Codecs"
 import { compile } from "../src/index.js"
 
 const utils = `module ScriptContext
@@ -64,14 +65,14 @@ export main = (_redeemer: Data) -> {
     redeemer_tag = fstPair(redeemer_pair)
     ptr_fields = sndPair(redeemer_pair)
 
+    // index of the seed or state input/ref-input  
+    input_ptr = unIData(headList(ptr_fields))
+
     if (redeemer_tag == 0) {
-      seed_ptr = unIData(headList(ptr_fields))
-      input = get(tx.inputs, seed_ptr, 0) as ScriptContext::UTxO
+      input = get(tx.inputs, input_ptr, 0) as ScriptContext::UTxO
 
       assert(input.ref == SEED, "seed not spent")
     } else {
-      // index of the state input/ref-input  
-      input_ptr = unIData(headList(ptr_fields))
       witness_ptr = unIData(headList(tailList(ptr_fields)))
       signer_ptr = unIData(headList(tailList(tailList(ptr_fields))))
 
@@ -374,6 +375,8 @@ describe("anchor", () => {
     expect(script).toBeDefined()
 
     console.log("Anchor validator size:", script.root.length)
+
+    console.log("Anchor cborHex:", Bytes.toHex(script.root))
   })
 
   it("spends the parametrized seed when redeemer tag is 0", () => {

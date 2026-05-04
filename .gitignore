@@ -2,3 +2,5 @@ dist
 node_modules
 *.tsbuildinfo
 tsconfig.tsbuildinfo
+.rollup.cache
+.pnpm-store

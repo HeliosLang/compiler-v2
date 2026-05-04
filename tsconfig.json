@@ -15,8 +15,6 @@
     "exactOptionalPropertyTypes": true,
     "moduleDetection": "force",
     "composite": true,
-    "downlevelIteration": true,
-    "esModuleInterop": false,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
     "types": ["bun"],

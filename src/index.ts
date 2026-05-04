@@ -35,6 +35,7 @@ export const compile = (
 
   for (const [name, entryPoint] of Object.entries(entryPoints)) {
     const irExpr = Applied.generateEntryPointIR(entryPoint)
+    //console.log(IR.pretty(IR.optimize(irExpr)))
     const uplcTerm = IR.generateUplc(irExpr)
     const root = Uplc.encodeRoot("1.1.0", uplcTerm)
 
